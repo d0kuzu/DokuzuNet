@@ -1,4 +1,5 @@
-﻿using DokuzuNet.Utils;
+﻿using DokuzuNet.Networking;
+using DokuzuNet.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -63,7 +64,16 @@ namespace DokuzuNet.Server
                     if (bytesRead == 0) break;
 
                     var msg = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    Logger.Info($"Received from {endpoint}: {msg}");
+                    var packet = Packet.FromJson(msg);
+
+                    if (packet != null)
+                    {
+                        Logger.Info($"Packet from {endpoint}: {packet.Type}");
+                    }
+                    else
+                    {
+                        Logger.Error($"Invalid packet from {endpoint}: {msg}");
+                    }
 
                     byte[] response = System.Text.Encoding.UTF8.GetBytes($"Echo: {msg}");
                     await stream.WriteAsync(response);

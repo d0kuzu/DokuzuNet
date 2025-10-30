@@ -1,4 +1,5 @@
-﻿using DokuzuNet.Utils;
+﻿using DokuzuNet.Networking;
+using DokuzuNet.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -97,6 +98,26 @@ namespace DokuzuNet.Client
             _isConnected = false;
 
             Logger.Info("Client disconnected.");
+        }
+
+        public async Task SendPacketAsync(Packet packet)
+        {
+            if (!_isConnected || _stream == null)
+            {
+                Logger.Error("Not connected to server.");
+                return;
+            }
+
+            try
+            {
+                string json = packet.ToJson();
+                byte[] data = System.Text.Encoding.UTF8.GetBytes(json);
+                await _stream.WriteAsync(data);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Error sending packet: {ex.Message}");
+            }
         }
     }
 }
