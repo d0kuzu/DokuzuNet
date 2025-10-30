@@ -1,90 +1,158 @@
-﻿using DokuzuNet.Networking;
-using DokuzuNet.Utils;
+﻿using DokuzuNet.Utils;
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DokuzuNet.Server
 {
-    public class ServerManager
+    public class ServerManager : IDisposable
     {
-        private TcpListener? _listener;
+        private UdpClient _udpServer;
+        private IPEndPoint _localEndPoint;
+        private CancellationTokenSource _cts;
+        private Task? _receiveTask;
         private bool _isRunning;
 
-        public async Task StartAsync(int port, CancellationToken token = default)
+        private const int DefaultPort = 11000;
+
+        public ServerManager(int port = DefaultPort)
+        {
+            _localEndPoint = new IPEndPoint(IPAddress.Any, port);
+            _udpServer = new UdpClient(_localEndPoint);
+            _cts = new CancellationTokenSource();
+            _isRunning = false;
+        }
+
+        public async Task StartAsync()
         {
             if (_isRunning)
             {
-                Logger.Info("Server is already running.");
+                Logger.Info("UDP сервер уже запущен.");
                 return;
             }
 
-            _listener = new TcpListener(IPAddress.Any, port);
-            _listener.Start();
             _isRunning = true;
+            _receiveTask = ReceiveLoopAsync(_cts.Token);
 
-            Logger.Info($"Server started on port {port}.");
+            Logger.Info($"UDP сервер запущен на порту {_localEndPoint.Port}");
+            await Task.CompletedTask;
+        }
+
+        public async Task StopAsync()
+        {
+            if (!_isRunning)
+            {
+                Logger.Info("UDP сервер уже остановлен.");
+                return;
+            }
+
+            _isRunning = false;
+            _cts.Cancel();
 
             try
             {
-                while (!token.IsCancellationRequested)
-                {
-                    var client = await _listener.AcceptTcpClientAsync(token);
-                    _ = HandleClientAsync(client);
-                }
+                await _receiveTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                Logger.Info("Server stopped gracefully.");
-            }
-            finally
-            {
-                _listener.Stop();
-                _isRunning = false;
-            }
-        }
-
-        private async Task HandleClientAsync(TcpClient client)
-        {
-            var endpoint = client.Client.RemoteEndPoint?.ToString();
-            Logger.Info($"Client connected: {endpoint}");
-
-            var buffer = new byte[1024];
-            using var stream = client.GetStream();
-
-            try
-            {
-                while (true)
-                {
-                    int bytesRead = await stream.ReadAsync(buffer);
-                    if (bytesRead == 0) break;
-
-                    var msg = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    var packet = Packet.FromJson(msg);
-
-                    if (packet != null)
-                    {
-                        Logger.Info($"Packet from {endpoint}: {packet.Type}");
-                    }
-                    else
-                    {
-                        Logger.Error($"Invalid packet from {endpoint}: {msg}");
-                    }
-
-                    byte[] response = System.Text.Encoding.UTF8.GetBytes($"Echo: {msg}");
-                    await stream.WriteAsync(response);
-                }
+                // Ожидаемое поведение
             }
             catch (Exception ex)
             {
-                Logger.Error($"Client {endpoint} disconnected: {ex.Message}");
+                Logger.Error($"Ошибка при остановке: {ex.Message}");
             }
+            finally
+            {
+                _udpServer?.Close();
+                Logger.Info("UDP сервер остановлен.");
+            }
+        }
 
-            Logger.Info($"Client disconnected: {endpoint}");
+        private async Task ReceiveLoopAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    UdpReceiveResult result = await _udpServer.ReceiveAsync()
+                        .WithCancellation(token)
+                        .ConfigureAwait(false);
+
+                    string message = Encoding.UTF8.GetString(result.Buffer);
+                    IPEndPoint remote = result.RemoteEndPoint;
+
+                    Logger.Info($"Получено от {remote}: {message}");
+
+                    await SendResponseAsync($"Эхо: {message}", remote, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Ошибка приёма UDP: {ex.Message}");
+                }
+            }
+        }
+
+        private async Task SendResponseAsync(string response, IPEndPoint remote, CancellationToken token)
+        {
+            try
+            {
+                byte[] data = Encoding.UTF8.GetBytes(response);
+                await _udpServer.SendAsync(data, data.Length, remote)
+                    .WithCancellation(token)
+                    .ConfigureAwait(false);
+
+                Logger.Info($"Отправлено на {remote}: {response}");
+            }
+            catch (OperationCanceledException)
+            {
+                // Игнорируем при отмене
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Ошибка отправки на {remote}: {ex.Message}");
+            }
+        }
+
+        public void Dispose()
+        {
+            _cts?.Cancel();
+            try
+            {
+                _receiveTask?.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch { /* игнорируем */ }
+
+            _udpServer?.Dispose();
+            _cts?.Dispose();
+        }
+    }
+
+    public static class TaskExtensions
+    {
+        public static async Task<T> WithCancellation<T>(this Task<T> task, CancellationToken cancellationToken)
+        {
+            var tcs = new TaskCompletionSource<bool>();
+            using (cancellationToken.Register(s => ((TaskCompletionSource<bool>)s).TrySetResult(true), tcs))
+            {
+                if (task != await Task.WhenAny(task, tcs.Task).ConfigureAwait(false))
+                    throw new OperationCanceledException(cancellationToken);
+            }
+            return await task.ConfigureAwait(false);
         }
     }
 }
