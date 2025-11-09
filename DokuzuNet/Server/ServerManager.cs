@@ -78,15 +78,15 @@ namespace DokuzuNet.Server
                     var message = Encoding.UTF8.GetString(result.Buffer);
                     var remote = result.RemoteEndPoint;
 
-                    Logger.Info($"Получено от {remote}: {message}");
+                    Logger.Info($"Received from {remote}: {message}");
 
-                    await SendResponseAsync($"Эхо: {message}", remote, token);
+                    await SendResponseAsync($"Echo: {message}", remote, token);
                 }
                 catch (OperationCanceledException) { break; }
                 catch (ObjectDisposedException) { break; }
                 catch (Exception ex)
                 {
-                    Logger.Error($"Ошибка приёма: {ex.Message}");
+                    Logger.Error($"Receive error: {ex.Message}");
                 }
             }
         }
@@ -100,12 +100,12 @@ namespace DokuzuNet.Server
 
                 await _udpServer.SendAsync(memory, remote, token).ConfigureAwait(false);
 
-                Logger.Info($"Отправлено на {remote}: {response}");
+                Logger.Info($"Send to {remote}: {response}");
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Logger.Error($"Ошибка отправки на {remote}: {ex.Message}");
+                Logger.Error($"Sedning error to {remote}: {ex.Message}");
             }
         }
 

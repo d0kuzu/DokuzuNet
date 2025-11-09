@@ -3,121 +3,128 @@ using DokuzuNet.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace DokuzuNet.Client
 {
-    public class ClientManager
+    public class ClientManager : IDisposable
     {
-        private TcpClient? _client;
-        private NetworkStream? _stream;
-        private CancellationTokenSource? _cts;
-        private bool _isConnected;
+        private UdpClient _udpClient;
+        private IPEndPoint _remoteEndPoint;
+        private CancellationTokenSource _cts;
+        private Task _receiveTask;
+        private bool _isRunning;
 
-        public bool IsConnected => _isConnected;
+        private const int DefaultPort = 11000;
+        private readonly Encoding _encoding = Encoding.UTF8;
 
-        public async Task ConnectAsync(string host, int port)
+        public event EventHandler<string>? MessageReceived;
+        public event EventHandler<Exception>? ReceiveError;
+
+        public ClientManager(string serverIp = "127.0.0.1", int serverPort = DefaultPort, int localPort = 0)
         {
-            if (_isConnected)
+            var serverIpAddress = IPAddress.Parse(serverIp);
+            _remoteEndPoint = new IPEndPoint(serverIpAddress, serverPort);
+
+            _udpClient = new UdpClient(localPort);
+
+            _cts = new CancellationTokenSource();
+            _receiveTask = Task.CompletedTask;
+            _isRunning = false;
+        }
+
+        public Task StartAsync()
+        {
+            if (_isRunning)
             {
-                Logger.Info("Already connected to server.");
+                Logger.Info("Client already running.");
+                return Task.CompletedTask;
+            }
+
+            _isRunning = true;
+            _receiveTask = ReceiveLoopAsync(_cts.Token);
+            Logger.Info($"Client started, listening for messages from {_remoteEndPoint}");
+            return Task.CompletedTask;
+        }
+
+        public async Task StopAsync()
+        {
+            if (!_isRunning)
+            {
+                Logger.Info("Client already stopped.");
                 return;
             }
 
+            _isRunning = false;
+            _cts.Cancel();
+
             try
             {
-                _client = new TcpClient();
-                await _client.ConnectAsync(host, port);
-                _stream = _client.GetStream();
-                _cts = new CancellationTokenSource();
-                _isConnected = true;
-
-                Logger.Info($"Connected to server {host}:{port}");
-                _ = ListenAsync(_cts.Token);
+                await _receiveTask.ConfigureAwait(false);
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Logger.Error($"Failed to connect: {ex.Message}");
+                ReceiveError?.Invoke(this, ex);
+            }
+            finally
+            {
+                Logger.Info("Client stopped.");
             }
         }
-
+        
         public async Task SendAsync(string message)
         {
-            if (!_isConnected || _stream == null)
-            {
-                Logger.Error("Not connected to server.");
-                return;
-            }
+            if (string.IsNullOrEmpty(message))
+                throw new ArgumentException("Message cannot be null or empty.", nameof(message));
 
-            try
-            {
-                byte[] data = Encoding.UTF8.GetBytes(message);
-                await _stream.WriteAsync(data);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"Error sending message: {ex.Message}");
-            }
+            var data = _encoding.GetBytes(message);
+            await _udpClient.SendAsync(data, data.Length, _remoteEndPoint);
+            Logger.Info($"Client sent: {message}");
         }
 
-        private async Task ListenAsync(CancellationToken token)
+        public async Task SendAsync(byte[] data)
         {
-            var buffer = new byte[1024];
+            if (data == null) throw new ArgumentNullException(nameof(data));
+            if (data.Length == 0) throw new ArgumentException("Data cannot be empty.", nameof(data));
 
-            try
+            await _udpClient.SendAsync(data, data.Length, _remoteEndPoint);
+            Logger.Info($"Client sent {data.Length} bytes");
+        }
+
+        private async Task ReceiveLoopAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
             {
-                while (!token.IsCancellationRequested)
+                try
                 {
-                    int bytesRead = await _stream!.ReadAsync(buffer, token);
-                    if (bytesRead == 0)
-                    {
-                        Logger.Info("Disconnected from server.");
-                        Disconnect();
-                        break;
-                    }
+                    var result = await _udpClient.ReceiveAsync(token).ConfigureAwait(false);
+                    var message = _encoding.GetString(result.Buffer);
 
-                    string msg = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    Logger.Info($"Received from server: {msg}");
+                    MessageReceived?.Invoke(this, message);
+
+                    Logger.Info($"Client received: {message} from {result.RemoteEndPoint}");
+                }
+                catch (OperationCanceledException) {  }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.OperationAborted)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    ReceiveError?.Invoke(this, ex);
                 }
             }
-            catch (Exception ex)
-            {
-                Logger.Error($"Connection error: {ex.Message}");
-            }
         }
 
-        public void Disconnect()
+        public void Dispose()
         {
-            if (!_isConnected) return;
-
             _cts?.Cancel();
-            _stream?.Close();
-            _client?.Close();
-            _isConnected = false;
-
-            Logger.Info("Client disconnected.");
-        }
-
-        public async Task SendPacketAsync(Packet packet)
-        {
-            if (!_isConnected || _stream == null)
-            {
-                Logger.Error("Not connected to server.");
-                return;
-            }
-
-            try
-            {
-                string json = packet.ToJson();
-                byte[] data = System.Text.Encoding.UTF8.GetBytes(json);
-                await _stream.WriteAsync(data);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"Error sending packet: {ex.Message}");
-            }
+            _udpClient?.Dispose();
+            _cts?.Dispose();
         }
     }
 }

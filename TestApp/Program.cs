@@ -1,4 +1,5 @@
 ﻿using DokuzuNet.Server;
 
 var server = new ServerManager();
-await server.StartAsync(7777);
+await server.StartAsync();
+Console.ReadLine();
