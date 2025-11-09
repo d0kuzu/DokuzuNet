@@ -76,8 +76,12 @@ namespace DokuzuNet.Core
             if (_isRunning) throw new InvalidOperationException("NetworkManager already running.");
 
             _mode = NetworkMode.Host;
-            await InitializeUdpAsync(new IPEndPoint(IPAddress.Any, port));
-            Logger.Info($"Host started on port {port} (Server + Client)");
+
+            var localEndPoint = new IPEndPoint(IPAddress.Any, port);
+            _localEndPoint = localEndPoint;
+
+            await InitializeUdpAsync(localEndPoint);
+            Logger.Info($"Host started on port {port} (loopback client: {_remoteEndPoint})");
         }
 
         private async Task InitializeUdpAsync(IPEndPoint localEndPoint)
@@ -89,10 +93,9 @@ namespace DokuzuNet.Core
 
             _receiveTask = ReceiveLoopAsync(_cts.Token);
 
-            // Если это клиент или хост — можно сразу отправить "подключение"
-            if (_mode == NetworkMode.Client || _mode == NetworkMode.Host)
+            if (_mode == NetworkMode.Client && _remoteEndPoint != null)
             {
-                await SendInternalAsync("CONNECT", _remoteEndPoint!, _cts.Token);
+                await SendInternalAsync("CONNECT", _remoteEndPoint, _cts.Token);
             }
         }
 
@@ -102,13 +105,14 @@ namespace DokuzuNet.Core
             if (!_isRunning) return;
 
             _isRunning = false;
+            bool wasClient = _mode == NetworkMode.Client;
             _mode = NetworkMode.None;
 
             _cts?.Cancel();
 
-            if (_mode == NetworkMode.Client || _mode == NetworkMode.Host)
+            if (wasClient && _remoteEndPoint != null)
             {
-                await SendInternalAsync("DISCONNECT", _remoteEndPoint!, _cts!.Token).ContinueWith(_ => { }, TaskContinuationOptions.OnlyOnRanToCompletion);
+                _ = SendInternalAsync("DISCONNECT", _remoteEndPoint, _cts!.Token);
             }
 
             try
@@ -161,9 +165,8 @@ namespace DokuzuNet.Core
                 throw new InvalidOperationException("Cannot broadcast: not in Server or Host mode.");
 
             // В реальном проекте — хранить список клиентов
-            // Пока просто шлём на remote (если есть)
-            if (_remoteEndPoint != null)
-                await SendInternalAsync(message, _remoteEndPoint, _cts!.Token);
+            //if (_remoteEndPoint != null)
+            //    await SendInternalAsync(message, _remoteEndPoint, _cts!.Token);
         }
 
         private async Task SendInternalAsync(string message, IPEndPoint target, CancellationToken token)
