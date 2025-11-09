@@ -23,20 +23,22 @@ namespace DokuzuNet.Server
             _localEndPoint = new IPEndPoint(IPAddress.Any, port);
             _udpServer = new UdpClient(_localEndPoint);
             _cts = new CancellationTokenSource();
+            _receiveTask = Task.CompletedTask;
         }
 
-        public async Task StartAsync()
+        public Task StartAsync()
         {
             if (_isRunning)
             {
                 Logger.Info("UDP server already started.");
-                return;
+                return Task.CompletedTask;
             }
+
             _isRunning = true;
-
             _receiveTask = ReceiveLoopAsync(_cts.Token);
-
             Logger.Info($"UDP server started on port {_localEndPoint.Port}");
+
+            return Task.CompletedTask;
         }
 
         public async Task StopAsync()
