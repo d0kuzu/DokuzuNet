@@ -6,5 +6,5 @@ using System.Threading.Tasks;
 
 namespace DokuzuNet.Networking.Message
 {
-    public record ChatMessage(string Text) : IMessage;
+    public record ChatMessage(string Text, string Sender = "") : IMessage;
 }

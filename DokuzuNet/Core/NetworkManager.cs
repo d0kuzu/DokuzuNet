@@ -1,4 +1,5 @@
 ﻿using DokuzuNet.Core.Connection;
+using DokuzuNet.Integration;
 using DokuzuNet.Networking;
 using DokuzuNet.Networking.Message;
 using DokuzuNet.Transprot;
@@ -38,6 +39,24 @@ namespace DokuzuNet.Core
         {
             if (Instance != null) throw new InvalidOperationException("NetworkManager already exists.");
             Instance = this;
+
+            _registry.Register<RpcMessage>();
+            _registry.On<RpcMessage>((player, msg) =>
+            {
+                if (_objects.TryGetValue(msg.ObjectId, out var obj))
+                {
+                    // Найди Behaviour по BehaviourId (расширь)
+                    var behaviour = obj.GetBehaviour<YourBehaviour>(); // Заглушка
+                    behaviour?.InvokeRpc(msg.RpcId, msg.Args);
+                }
+            });
+
+            _registry.Register<SpawnMessage>();
+            _registry.On<SpawnMessage>((player, msg) => HandleSpawn(msg));
+
+            // Регистрация префабов (добавь свои)
+            _prefabs.Register("PlayerPrefab");
+            _prefabs.Register("EnemyPrefab");
 
             _transport = transport;
             _transport.OnClientConnected += HandleClientConnected;
@@ -184,5 +203,84 @@ namespace DokuzuNet.Core
 
         public IReadOnlyCollection<NetworkPlayer> Players => _players.Values;
         public NetworkPlayer? GetPlayer(IConnection conn) => _players.GetValueOrDefault(conn);
+
+
+
+    
+
+
+
+
+
+    private readonly PrefabRegistry _prefabs = new();
+        private readonly Dictionary<uint, NetworkObject> _objects = new();
+        private uint _nextNetworkId = 1;
+
+        // === SPAWN ===
+        public async Task<NetworkObject> SpawnAsync(string prefabName, NetworkPlayer owner, float x = 0, float y = 0, float z = 0)
+        {
+            if (!IsServer) throw new InvalidOperationException("Only server can spawn.");
+
+            var prefabId = _prefabs.GetId(prefabName);
+            if (prefabId == 0) throw new InvalidOperationException($"Prefab not registered: {prefabName}");
+
+            var netId = _nextNetworkId++;
+            var obj = new NetworkObject();
+            obj.Initialize(netId, owner);
+
+            _objects[netId] = obj;
+
+            // Отправка на все клиенты
+            var msg = new SpawnMessage(prefabId, netId, owner.Connection.EndPoint.Port, x, y, z); // OwnerId — пример Port
+            await BroadcastAsync(msg);
+
+            obj.OnSpawn();
+            return obj;
+        }
+
+        // === DESPAWN ===
+        public async Task DespawnAsync(NetworkObject obj)
+        {
+            if (!IsServer) throw new InvalidOperationException("Only server can despawn.");
+
+            if (_objects.Remove(obj.NetworkId))
+            {
+                obj.OnDespawn();
+
+                // Отправка DespawnMessage (добавь аналогично SpawnMessage)
+                var msg = new DespawnMessage(obj.NetworkId);
+                await BroadcastAsync(msg);
+            }
+        }
+
+        // === ОБРАБОТКА SPAWN ===
+        private void HandleSpawn(SpawnMessage msg)
+        {
+            var prefabName = _prefabs.GetPrefab(msg.PrefabId);
+            if (string.IsNullOrEmpty(prefabName)) return;
+
+            var owner = Players.FirstOrDefault(p => p.Connection.EndPoint.Port == msg.OwnerId); // Пример поиска owner
+
+            var obj = new NetworkObject();
+            obj.Initialize(msg.NetworkId, owner ?? LocalPlayer);
+
+            _objects[msg.NetworkId] = obj;
+            obj.OnSpawn();
+
+            // Создай локальный объект (в игре — Instantiate(prefabName))
+            Console.WriteLine($"Spawned {prefabName} at ({msg.X}, {msg.Y}, {msg.Z})");
+        }
+
+        // В конструкторе
+        public NetworkManager(ITransport transport)
+        {
+            // ... (как раньше)
+
+            // Регистрация сообщений
+            
+        }
+
+        // Добавь DespawnMessage и обработку
+
     }
 }
