@@ -6,7 +6,5 @@ using System.Threading.Tasks;
 
 namespace DokuzuNet.Networking.Message
 {
-    public interface IMessage
-    {
-    }
+    public record ChatMessage(string Text) : IMessage;
 }
