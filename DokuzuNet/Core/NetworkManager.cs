@@ -1,4 +1,7 @@
 ﻿using DokuzuNet.Core.Connection;
+using DokuzuNet.Networking;
+using DokuzuNet.Networking.Message;
+using DokuzuNet.Transprot;
 using DokuzuNet.Utils;
 using System;
 using System.Collections.Concurrent;
@@ -11,284 +14,175 @@ using System.Threading.Tasks;
 
 namespace DokuzuNet.Core
 {
-    public enum NetworkMode
+    public enum NetworkMode { None, Server, Client, Host }
+
+    public class NetworkManager
     {
-        None,
-        Server,
-        Client,
-        Host
-    }
+        // === Синглтон ===
+        public static NetworkManager? Instance { get; private set; }
 
-    public class NetworkManager : IDisposable
-    {
-        private UdpClient? _udpClient;
-        private IPEndPoint? _localEndPoint;
-        private IPEndPoint? _serverEndPoint; // для клиента
+        private readonly ITransport _transport;
+        private readonly MessageRegistry _registry = new();
+        private readonly Dictionary<Type, Delegate> _messageHandlers = new();
 
-        private CancellationTokenSource? _cts;
-        private Task? _receiveTask;
+        public NetworkMode Mode { get; private set; } = NetworkMode.None;
+        public bool IsServer => Mode == NetworkMode.Server || Mode == NetworkMode.Host;
+        public bool IsClient => Mode == NetworkMode.Client || Mode == NetworkMode.Host;
 
-        private NetworkMode _mode = NetworkMode.None;
-        private bool _isRunning = false;
+        private readonly Dictionary<IConnection, NetworkPlayer> _players = new();
 
-        private const int DefaultPort = 11000;
-        private readonly Encoding _encoding = Encoding.UTF8;
+        public event Action<NetworkPlayer>? OnPlayerJoined;
+        public event Action<NetworkPlayer>? OnPlayerLeft;
 
-        // === Подключения (только на сервере/хосте) ===
-        private readonly ConcurrentDictionary<IPEndPoint, UdpConnection> _connections = new();
+        public NetworkManager(ITransport transport)
+        {
+            if (Instance != null) throw new InvalidOperationException("NetworkManager already exists.");
+            Instance = this;
 
-        // === Клиентское подключение (для Client/Host) ===
-        private UdpConnection? _clientConnection;
-
-        // === События ===
-        public event EventHandler<UdpConnection>? OnClientConnected;
-        public event EventHandler<UdpConnection>? OnClientDisconnected;
-        public event EventHandler<(UdpConnection conn, ReadOnlyMemory<byte> data)>? OnMessageReceived;
-        public event EventHandler<Exception>? OnError;
-
-        // === Свойства ===
-        public NetworkMode Mode => _mode;
-        public bool IsRunning => _isRunning;
-        public int LocalPort => _localEndPoint?.Port ?? 0;
-        public bool IsClient => _mode == NetworkMode.Client || _mode == NetworkMode.Host;
-        public bool IsServer => _mode == NetworkMode.Server || _mode == NetworkMode.Host;
-
-        public NetworkManager() { }
+            _transport = transport;
+            _transport.OnClientConnected += HandleClientConnected;
+            _transport.OnClientDisconnected += HandleClientDisconnected;
+            _transport.OnDataReceived += HandleDataReceived;
+        }
 
         // === СТАРТ ===
 
-        public async Task StartServerAsync(int port = DefaultPort)
+        public async Task StartServerAsync(int port, CancellationToken ct = default)
         {
-            if (_isRunning) throw new InvalidOperationException("Already running.");
-
-            _mode = NetworkMode.Server;
-            _localEndPoint = new IPEndPoint(IPAddress.Any, port);
-
-            await InitializeAsync();
-            Logger.Info($"[SERVER] Started on port {port}");
+            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
+            Mode = NetworkMode.Server;
+            await _transport.StartServerAsync(port, ct);
+            Logger.Info("[NET] Server started");
         }
 
-        public async Task StartClientAsync(string serverIp = "127.0.0.1", int serverPort = DefaultPort, int localPort = 0)
+        public async Task StartClientAsync(string ip, int port, CancellationToken ct = default)
         {
-            if (_isRunning) throw new InvalidOperationException("Already running.");
-
-            var serverIpAddress = IPAddress.Parse(serverIp);
-            _serverEndPoint = new IPEndPoint(serverIpAddress, serverPort);
-            _localEndPoint = new IPEndPoint(IPAddress.Any, localPort);
-
-            _mode = NetworkMode.Client;
-
-            await InitializeAsync();
-
-            _clientConnection = new UdpConnection(_udpClient!, _serverEndPoint);
-            await SendConnectAsync();
-            Logger.Info($"[CLIENT] Connecting to {serverIp}:{serverPort}");
+            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
+            Mode = NetworkMode.Client;
+            await _transport.StartClientAsync(ip, port, ct);
+            Logger.Info("[NET] Client connected");
         }
 
-        public async Task StartHostAsync(int port = DefaultPort)
+        public async Task StartHostAsync(int port, CancellationToken ct = default)
         {
-            if (_isRunning) throw new InvalidOperationException("Already running.");
+            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
+            Mode = NetworkMode.Host;
 
-            _mode = NetworkMode.Host;
-            _localEndPoint = new IPEndPoint(IPAddress.Any, port);
+            await _transport.StartServerAsync(port, ct);
+            await _transport.StartClientAsync("127.0.0.1", port, ct);
 
-            await InitializeAsync();
+            // Локальный игрок
+            var localConn = _transport.GetLocalClientConnection();
+            if (localConn != null)
+            {
+                var player = new NetworkPlayer(localConn);
+                _players[localConn] = player;
+                OnPlayerJoined?.Invoke(player);
+            }
 
-            // Локальный клиент в хосте
-            _serverEndPoint = new IPEndPoint(IPAddress.Loopback, port);
-            _clientConnection = new UdpConnection(_udpClient!, _serverEndPoint);
-
-            Logger.Info($"[HOST] Started on port {port} (Server + Local Client)");
-        }
-
-        private async Task InitializeAsync()
-        {
-            _udpClient = new UdpClient(_localEndPoint!);
-            _cts = new CancellationTokenSource();
-            _isRunning = true;
-            _receiveTask = ReceiveLoopAsync(_cts.Token);
-        }
-
-        private async Task SendConnectAsync()
-        {
-            if (_clientConnection == null) return;
-            var data = _encoding.GetBytes("CONNECT");
-            await _clientConnection.SendAsync(data, _cts!.Token);
+            Logger.Info("[NET] Host started");
         }
 
         // === ОТПРАВКА ===
 
-        public async ValueTask SendToServerAsync(ReadOnlyMemory<byte> data)
+        public async ValueTask SendToServerAsync<T>(T message, CancellationToken ct = default) where T : IMessage
         {
-            if (!IsClient || _clientConnection == null)
-                throw new InvalidOperationException("Not in Client or Host mode.");
-
-            await _clientConnection.SendAsync(data, _cts!.Token).ConfigureAwait(false);
+            if (!IsClient) throw new InvalidOperationException("Not a client.");
+            var data = _registry.Serialize(message);
+            var conn = _transport.GetLocalClientConnection() ?? throw new InvalidOperationException("No local connection.");
+            await _transport.SendToAsync(conn, data, ct);
         }
 
-        public async ValueTask SendToAsync(UdpConnection connection, ReadOnlyMemory<byte> data)
+        public async ValueTask SendToAsync<T>(NetworkPlayer player, T message, CancellationToken ct = default) where T : IMessage
         {
-            if (!IsServer) throw new InvalidOperationException("Not in Server or Host mode.");
-            if (connection == null) throw new ArgumentNullException(nameof(connection));
-
-            await connection.SendAsync(data, _cts!.Token).ConfigureAwait(false);
+            if (!IsServer) throw new InvalidOperationException("Not a server.");
+            var data = _registry.Serialize(message);
+            await _transport.SendToAsync(player.Connection, data, ct);
         }
 
-        public async ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, bool includeLocalClient = true)
+        public async ValueTask BroadcastAsync<T>(T message, bool includeLocal = true, CancellationToken ct = default) where T : IMessage
         {
-            if (!IsServer) throw new InvalidOperationException("Not in Server or Host mode.");
+            if (!IsServer) throw new InvalidOperationException("Not a server.");
+            var data = _registry.Serialize(message);
+            await _transport.BroadcastAsync(data, includeLocal, ct);
+        }
 
-            foreach (var conn in _connections.Values)
+        // === ОБРАБОТКА ===
+
+        private void HandleClientConnected(IConnection connection)
+        {
+            var player = new NetworkPlayer(connection);
+            _players[connection] = player;
+            OnPlayerJoined?.Invoke(player);
+        }
+
+        private void HandleClientDisconnected(IConnection connection)
+        {
+            if (_players.TryGetValue(connection, out var player))
             {
-                if (!includeLocalClient && IPAddress.IsLoopback(conn.EndPoint.Address)) continue;
-                await conn.SendAsync(data, _cts!.Token).ConfigureAwait(false);
-            }
-        }
-
-        // === ПРИЁМ ===
-
-        private async Task ReceiveLoopAsync(CancellationToken token)
-        {
-            while (!token.IsCancellationRequested && _udpClient != null)
-            {
-                try
-                {
-                    var result = await _udpClient.ReceiveAsync(token).ConfigureAwait(false);
-                    var remote = result.RemoteEndPoint;
-                    var data = result.Buffer;
-
-                    Logger.Info($"[RECV] ← {remote}: {data.Length} bytes");
-
-                    await HandlePacketAsync(data, remote, token);
-                }
-                catch (OperationCanceledException) { break; }
-                catch (ObjectDisposedException) { break; }
-                catch (Exception ex)
-                {
-                    OnError?.Invoke(this, ex);
-                }
+                _players.Remove(connection);
+                OnPlayerLeft?.Invoke(player);
             }
         }
 
-        private async Task HandlePacketAsync(byte[] data, IPEndPoint remote, CancellationToken token)
+        private void HandleDataReceived((IConnection connection, ReadOnlyMemory<byte> data) packet)
         {
-            var message = _encoding.GetString(data);
+            var msg = _registry.Deserialize(packet.data);
+            if (msg == null) return;
 
-            // === Подключение ===
-            if (message == "CONNECT" && IsServer)
-            {
-                var conn = _connections.GetOrAdd(remote, _ => new UdpConnection(_udpClient!, remote));
-                conn.UpdateLastReceived();
-                OnClientConnected?.Invoke(this, conn);
+            var player = _players.GetValueOrDefault(packet.connection);
+            if (player == null) return;
 
-                var welcome = _encoding.GetBytes("WELCOME");
-                await conn.SendAsync(welcome, token);
-                return;
-            }
-
-            // === Отключение ===
-            if (message == "DISCONNECT" && IsServer)
+            // Рассылаем по типу
+            if (_messageHandlers.TryGetValue(msg.GetType(), out var handler))
             {
-                if (_connections.TryRemove(remote, out var conn))
-                {
-                    conn.Disconnect();
-                    OnClientDisconnected?.Invoke(this, conn);
-                }
-                return;
-            }
-
-            // === Обновление активности ===
-            if (IsServer && _connections.TryGetValue(remote, out var serverConn))
-            {
-                serverConn.UpdateLastReceived();
-            }
-
-            if (IsClient && _clientConnection?.EndPoint.Equals(remote) == true)
-            {
-                _clientConnection.UpdateLastReceived();
-            }
-
-            // === Пользовательские данные ===
-            var memory = new ReadOnlyMemory<byte>(data);
-            if (IsClient || _mode == NetworkMode.Host)
-            {
-                OnMessageReceived?.Invoke(this, (_clientConnection!, memory));
-            }
-            if (IsServer)
-            {
-                if (_connections.TryGetValue(remote, out var conn))
-                {
-                    OnMessageReceived?.Invoke(this, (conn, memory));
-                }
+                handler.DynamicInvoke(player, msg);
             }
         }
 
         // === СТОП ===
 
-        public async Task StopAsync()
+        public async Task StopAsync(CancellationToken ct = default)
         {
-            if (!_isRunning) return;
+            if (Mode == NetworkMode.None) return;
 
-            _isRunning = false;
-            bool wasClient = _mode == NetworkMode.Client;
+            await _transport.StopAsync(ct);
+            _players.Clear();
+            Mode = NetworkMode.None;
+            Instance = null;
+            Logger.Info("[NET] Stopped");
+        }
 
-            _mode = NetworkMode.None;
-            _cts?.Cancel();
-
-            // Только настоящий клиент шлёт DISCONNECT
-            if (wasClient && _clientConnection != null)
+        // === ПОДПИСКА НА СООБЩЕНИЯ ===
+        public void AddHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
+        {
+            var type = typeof(T);
+            if (_messageHandlers.TryGetValue(type, out var existing))
             {
-                var data = _encoding.GetBytes("DISCONNECT");
-                _ = _clientConnection.SendAsync(data, _cts!.Token);
+                _messageHandlers[type] = Delegate.Combine(existing, handler);
             }
-
-            try
+            else
             {
-                if (_receiveTask != null)
-                    await _receiveTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                OnError?.Invoke(this, ex);
-            }
-            finally
-            {
-                foreach (var conn in _connections.Values)
-                {
-                    conn.Dispose();
-                }
-                _connections.Clear();
-
-                _clientConnection?.Dispose();
-                _clientConnection = null;
-
-                _udpClient?.Close();
-                _udpClient?.Dispose();
-                _cts?.Dispose();
-
-                _udpClient = null;
-                _cts = null;
-                _receiveTask = null;
-                _localEndPoint = null;
-                _serverEndPoint = null;
-
-                Logger.Info("NetworkManager stopped.");
+                _messageHandlers[type] = handler;
             }
         }
 
-        public void Dispose()
+        public void RemoveHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
         {
-            try { StopAsync().Wait(2000); }
-            catch { }
+            var type = typeof(T);
+            if (_messageHandlers.TryGetValue(type, out var existing))
+            {
+                var newDelegate = Delegate.Remove(existing, handler);
+                if (newDelegate == null)
+                    _messageHandlers.Remove(type);
+                else
+                    _messageHandlers[type] = newDelegate;
+            }
         }
 
-        // === Утилиты ===
+        // === УТИЛИТЫ ===
 
-        public IReadOnlyCollection<UdpConnection> GetConnections()
-            => _connections.Values;
-
-        public UdpConnection? GetClientConnection()
-            => _clientConnection;
+        public IReadOnlyCollection<NetworkPlayer> Players => _players.Values;
+        public NetworkPlayer? GetPlayer(IConnection conn) => _players.GetValueOrDefault(conn);
     }
 }
