@@ -28,7 +28,7 @@ namespace DokuzuNet.Core
         public NetworkMode Mode { get; private set; } = NetworkMode.None;
         public bool IsServer => Mode == NetworkMode.Server || Mode == NetworkMode.Host;
         public bool IsClient => Mode == NetworkMode.Client || Mode == NetworkMode.Host;
-        public NetworkPlayer? LocalPlayer { get; private set; } // Fixed: added LocalPlayer
+        public NetworkPlayer? LocalPlayer { get; private set; }
         public IConnection? LocalConnection => _transport.GetLocalClientConnection();
 
         private readonly Dictionary<IConnection, NetworkPlayer> _players = new();
@@ -49,17 +49,19 @@ namespace DokuzuNet.Core
             _transport.OnClientDisconnected += HandleClientDisconnected;
             _transport.OnDataReceived += HandleDataReceived;
 
-            // Регистрация сообщений
+            OnPlayerJoined += OnLocalPlayerJoined;
+
+            // Messages registration
             _registry.Register<ChatMessage>();
             _registry.Register<SpawnMessage>();
             _registry.Register<SyncVarMessage>();
             _registry.Register<RpcMessage>();
 
-            // Пример префабов
+            // Prefab registration (example)
             _prefabs.Register("PlayerPrefab");
         }
 
-        // === ПОДПИСКА ===
+        // === SUBSCRIPTION ===
         //public void AddHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
         //{
         //    var type = typeof(T);
@@ -86,7 +88,7 @@ namespace DokuzuNet.Core
         //    }
         //}
 
-        // === СТАРТ ===
+        // === START ===
         public async Task StartServerAsync(int port, CancellationToken ct = default)
         {
             if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
@@ -98,8 +100,7 @@ namespace DokuzuNet.Core
         {
             if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
             Mode = NetworkMode.Client;
-            await _transport.StartClientAsync(ip, port, ct);
-            LocalPlayer = new NetworkPlayer(_transport.GetLocalClientConnection()!); // Fixed: set LocalPlayer
+            await _transport.StartClientAsync(ip, port, false, ct);
         }
 
         public async Task StartHostAsync(int port, CancellationToken ct = default)
@@ -108,14 +109,14 @@ namespace DokuzuNet.Core
             Mode = NetworkMode.Host;
 
             await _transport.StartServerAsync(port, ct);
-            await _transport.StartClientAsync("127.0.0.1", port, ct);
+            await _transport.StartClientAsync("127.0.0.1", port, true, ct);
 
-            LocalPlayer = new NetworkPlayer(_transport.GetLocalClientConnection()!); // Fixed
+            LocalPlayer = new NetworkPlayer(_transport.GetLocalClientConnection()!);
             _players[LocalPlayer.Connection] = LocalPlayer;
             OnPlayerJoined?.Invoke(LocalPlayer);
         }
 
-        // === ОТПРАВКА ===
+        // === SENDING ===
         public async ValueTask SendToServerAsync<T>(T message, CancellationToken ct = default) where T : IMessage
         {
             if (!IsClient) throw new InvalidOperationException("Not a client.");
@@ -138,7 +139,15 @@ namespace DokuzuNet.Core
             await _transport.BroadcastAsync(data, includeLocal, ct);
         }
 
-        // === ОБРАБОТКА ===
+        // === PROCESSING ===
+        private void OnLocalPlayerJoined(NetworkPlayer player)
+        {
+            if (IsClient && player.Connection == _transport.GetLocalClientConnection())
+            {
+                LocalPlayer = player;
+                Logger.Info($"LocalPlayer setted: {player}");
+            }
+        }
         private void HandleClientConnected(IConnection connection)
         {
             var player = new NetworkPlayer(connection);

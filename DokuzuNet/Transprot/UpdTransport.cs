@@ -40,11 +40,11 @@ namespace DokuzuNet.Transprot
             return InitializeAsync(ct);
         }
 
-        public Task StartClientAsync(string serverIp, int serverPort, CancellationToken ct = default)
+        public Task StartClientAsync(string serverIp, int serverPort, bool isHost = false, CancellationToken ct = default)
         {
             if (_isRunning) throw new InvalidOperationException("Transport already running.");
 
-            _isServer = false;
+            _isServer = isHost;
             var ip = IPAddress.Parse(serverIp);
             _serverEndPoint = new IPEndPoint(ip, serverPort);
             _localEndPoint = new IPEndPoint(IPAddress.Any, 0);
@@ -62,10 +62,10 @@ namespace DokuzuNet.Transprot
             if (!_isServer && _serverEndPoint != null)
             {
                 _localClientConnection = new UdpConnection(_udpClient, _serverEndPoint);
-                SendConnectAsync().GetAwaiter().GetResult(); // Fixed: sync call, but safe for init
+                SendConnectAsync().GetAwaiter().GetResult();
             }
 
-            return Task.CompletedTask; // Fixed CS1998
+            return Task.CompletedTask;
         }
 
         private async Task SendConnectAsync()
@@ -153,6 +153,8 @@ namespace DokuzuNet.Transprot
             if (buffer.Length == 1 && buffer[0] == 0x02 && !_isServer && _localClientConnection?.EndPoint.Equals(remote) == true)
             {
                 _localClientConnection.UpdateLastReceived();
+
+                OnClientConnected?.Invoke(_localClientConnection);
                 return;
             }
 
