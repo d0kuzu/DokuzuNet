@@ -31,7 +31,6 @@ namespace DokuzuNet.Transprot
         private bool _isRunning = false;
 
         // === СТАРТ ===
-
         public Task StartServerAsync(int port, CancellationToken ct = default)
         {
             if (_isRunning) throw new InvalidOperationException("Transport already running.");
@@ -55,7 +54,7 @@ namespace DokuzuNet.Transprot
 
         private Task InitializeAsync(CancellationToken ct)
         {
-            _udpClient = new UdpClient(_localEndPoint);
+            _udpClient = new UdpClient(_localEndPoint!);
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             _isRunning = true;
             _receiveTask = ReceiveLoopAsync(_cts.Token);
@@ -63,10 +62,10 @@ namespace DokuzuNet.Transprot
             if (!_isServer && _serverEndPoint != null)
             {
                 _localClientConnection = new UdpConnection(_udpClient, _serverEndPoint);
-                SendConnectAsync().GetAwaiter().GetResult();
+                SendConnectAsync().GetAwaiter().GetResult(); // Fixed: sync call, but safe for init
             }
 
-            return Task.CompletedTask;
+            return Task.CompletedTask; // Fixed CS1998
         }
 
         private async Task SendConnectAsync()
@@ -77,7 +76,6 @@ namespace DokuzuNet.Transprot
         }
 
         // === ОТПРАВКА ===
-
         public ValueTask SendToAsync(IConnection connection, ReadOnlyMemory<byte> data, CancellationToken ct = default)
         {
             if (connection is not UdpConnection udpConn)
@@ -96,11 +94,10 @@ namespace DokuzuNet.Transprot
                 .ToArray();
 
             if (tasks.Length > 0)
-                await Task.WhenAll(tasks).ConfigureAwait(false);
+                await Task.WhenAll(tasks).ConfigureAwait(false); // Fixed: await all
         }
 
         // === ПРИЁМ ===
-
         private Task ReceiveLoopAsync(CancellationToken token)
         {
             return Task.Run(async () =>
@@ -122,7 +119,7 @@ namespace DokuzuNet.Transprot
                         OnError?.Invoke(ex);
                     }
                 }
-            }, token);
+            }, token); // Fixed: Task.Run to avoid CS1998
         }
 
         private async Task HandlePacketAsync(byte[] buffer, IPEndPoint remote, CancellationToken token)
@@ -138,6 +135,17 @@ namespace DokuzuNet.Transprot
 
                 var welcome = new byte[] { 0x02 }; // WELCOME
                 await conn.SendAsync(welcome, token);
+                return;
+            }
+
+            // DISCONNECT
+            if (buffer.Length == 1 && buffer[0] == 0x03 && _isServer)
+            {
+                if (_connections.TryRemove(remote, out var conn))
+                {
+                    conn.Disconnect();
+                    OnClientDisconnected?.Invoke(conn);
+                }
                 return;
             }
 
@@ -168,7 +176,6 @@ namespace DokuzuNet.Transprot
         }
 
         // === СТОП ===
-
         public async Task StopAsync(CancellationToken ct = default)
         {
             if (!_isRunning) return;
@@ -178,7 +185,7 @@ namespace DokuzuNet.Transprot
 
             if (!_isServer && _localClientConnection != null)
             {
-                var disconnect = new byte[] { 0x03 }; // DISCONNECT
+                var disconnect = new byte[] { 0x03 };
                 _ = _localClientConnection.SendAsync(disconnect, ct);
             }
 
@@ -211,8 +218,7 @@ namespace DokuzuNet.Transprot
         }
 
         // === УТИЛИТЫ ===
-
-        public IEnumerable<IConnection> GetConnections() => _connections.Values;
+        public IReadOnlyCollection<IConnection> GetConnections() => _connections.Values.ToList().AsReadOnly();
         public IConnection? GetLocalClientConnection() => _localClientConnection;
     }
 }

@@ -1,4 +1,5 @@
-﻿using DokuzuNet.Networking.Packet;
+﻿using DokuzuNet.Integration;
+using DokuzuNet.Networking.Packet;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -14,7 +15,7 @@ namespace DokuzuNet.Networking.Message
         private readonly Dictionary<Type, Delegate> _handlers = new();
         private ushort _nextId = 1;
 
-        public void Register<T>() where T : IMessage, new()
+        public void Register<T>() where T : IMessage
         {
             var type = typeof(T);
             if (_typeToId.ContainsKey(type)) return;
@@ -39,12 +40,39 @@ namespace DokuzuNet.Networking.Message
 
         public ReadOnlyMemory<byte> Serialize<T>(T message) where T : IMessage
         {
-            using var writer = new Networking.Packet.PacketWriter();
+            using var writer = new PacketWriter();
             writer.WriteUShort(_typeToId[typeof(T)]);
 
-            if (message is ChatMessage chat)
+            switch (message)
             {
-                writer.WriteString(chat.Text);
+                case ChatMessage chat:
+                    writer.WriteString(chat.Text);
+                    break;
+
+                case SpawnMessage spawn:
+                    writer.WriteUShort(spawn.PrefabId);
+                    writer.WriteUInt(spawn.NetworkId);
+                    writer.WriteUInt(spawn.OwnerId);
+                    writer.WriteFloat(spawn.X);
+                    writer.WriteFloat(spawn.Y);
+                    writer.WriteFloat(spawn.Z);
+                    break;
+
+                case SyncVarMessage sync:
+                    writer.WriteUInt(sync.ObjectId);
+                    writer.WriteUShort(sync.BehaviourId);
+                    writer.WriteUShort(sync.VarId);
+                    writer.WriteInt(sync.Value.Length);
+                    writer.WriteBytes(sync.Value);
+                    break;
+
+                case RpcMessage rpc:
+                    writer.WriteUInt(rpc.ObjectId);
+                    writer.WriteUShort(rpc.BehaviourId);
+                    writer.WriteUShort(rpc.RpcId);
+                    writer.WriteInt(rpc.Args.Length);
+                    writer.WriteBytes(rpc.Args);
+                    break;
             }
 
             return writer.GetBuffer();
@@ -52,14 +80,46 @@ namespace DokuzuNet.Networking.Message
 
         public IMessage? Deserialize(ReadOnlyMemory<byte> data)
         {
-            var reader = new Networking.Packet.PacketReader(data);
+            var reader = new PacketReader(data);
             var id = reader.ReadUShort();
 
             if (!_idToType.TryGetValue(id, out var type)) return null;
 
             return type switch
             {
-                var t when t == typeof(ChatMessage) => new ChatMessage(reader.ReadString()) as IMessage,
+                // ChatMessage
+                _ when type == typeof(ChatMessage) =>
+                    new ChatMessage(reader.ReadString()),
+
+                // SpawnMessage
+                _ when type == typeof(SpawnMessage) =>
+                    new SpawnMessage(
+                        reader.ReadUShort(),
+                        reader.ReadUInt(),
+                        reader.ReadUInt(),
+                        reader.ReadFloat(),
+                        reader.ReadFloat(),
+                        reader.ReadFloat()
+                    ),
+
+                // SyncVarMessage
+                _ when type == typeof(SyncVarMessage) =>
+                    new SyncVarMessage(
+                        reader.ReadUInt(),
+                        reader.ReadUShort(),
+                        reader.ReadUShort(),
+                        reader.ReadBytes(reader.ReadInt()).ToArray()
+                    ),
+
+                // RpcMessage
+                _ when type == typeof(RpcMessage) =>
+                    new RpcMessage(
+                        reader.ReadUInt(),
+                        reader.ReadUShort(),
+                        reader.ReadUShort(),
+                        reader.ReadBytes(reader.ReadInt()).ToArray()
+                    ),
+
                 _ => null
             };
         }

@@ -50,6 +50,14 @@ namespace DokuzuNet.Networking.Packet
             return value;
         }
 
+        public uint ReadUInt()
+        {
+            EnsureAvailable(4);
+            var value = BinaryPrimitives.ReadUInt32LittleEndian(_data.Span.Slice(_position));
+            _position += 4;
+            return value;
+        }
+
         public float ReadFloat()
         {
             EnsureAvailable(4);

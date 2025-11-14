@@ -20,7 +20,7 @@ namespace DokuzuNet.Transprot
         event Action<(IConnection connection, ReadOnlyMemory<byte> data)>? OnDataReceived;
         event Action<Exception>? OnError;
 
-        IEnumerable<IConnection> GetConnections();
+        IReadOnlyCollection<IConnection> GetConnections();
         IConnection? GetLocalClientConnection();
     }
 }

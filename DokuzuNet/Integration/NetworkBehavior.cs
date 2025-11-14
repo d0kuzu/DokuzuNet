@@ -17,48 +17,18 @@ namespace DokuzuNet.Integration
         public NetworkPlayer? Owner => NetworkObject?.Owner;
         public bool IsLocalOwned => NetworkObject?.IsLocalOwned ?? false;
 
-        protected virtual void OnSpawn() { }
-        protected virtual void OnDespawn() { }
-
-        protected async ValueTask SendToServerAsync<T>(T message) where T : IMessage
-        {
-            await NetworkManager.Instance!.SendToServerAsync(message);
-        }
-
-        protected async ValueTask SendToAsync<T>(NetworkPlayer player, T message) where T : IMessage
-        {
-            await NetworkManager.Instance!.SendToAsync(player, message);
-        }
-
-        protected async ValueTask BroadcastAsync<T>(T message, bool includeLocal = true)
-        {
-            await NetworkManager.Instance!.BroadcastAsync(message, includeLocal);
-        }
-
-
-
-
+        // === SyncVar ===
         private readonly Dictionary<ushort, Action<byte[]>> _syncVarSetters = new();
         private ushort _nextVarId = 1;
 
-        // === SyncVar ===
         protected SyncVar<T> CreateSyncVar<T>(T initialValue, Action<T>? onChanged = null) where T : struct
         {
             var varId = _nextVarId++;
             var syncVar = new SyncVar<T>(this, varId, initialValue, onChanged);
 
-            _syncVarSetters[varId] = (data) =>
+            _syncVarSetters[varId] = data =>
             {
-                // Десериализация (пример для int/float, расширь)
-                if (typeof(T) == typeof(int))
-                {
-                    syncVar.SetWithoutNotify(BitConverter.ToInt32(data));
-                }
-                else if (typeof(T) == typeof(float))
-                {
-                    syncVar.SetWithoutNotify(BitConverter.ToSingle(data));
-                }
-                // Добавь bool, Vector3, etc.
+                syncVar.SetFromBytes(data);
             };
 
             return syncVar;
@@ -68,104 +38,115 @@ namespace DokuzuNet.Integration
         {
             if (NetworkObject == null) return;
 
-            // Сериализация (пример)
-            byte[] rawValue = typeof(T) == typeof(int) ? BitConverter.GetBytes((int)(object)value)
-                : typeof(T) == typeof(float) ? BitConverter.GetBytes((float)(object)value)
-                : Array.Empty<byte>(); // Расширь
+            byte[] rawValue = typeof(T) switch
+            {
+                var t when t == typeof(int) => BitConverter.GetBytes((int)(object)value),
+                var t when t == typeof(float) => BitConverter.GetBytes((float)(object)value),
+                var t when t == typeof(uint) => BitConverter.GetBytes((uint)(object)value),
+                _ => Array.Empty<byte>()
+            };
 
             var msg = new SyncVarMessage(NetworkObject.NetworkId, GetBehaviourId(), varId, rawValue);
+
             if (NetworkManager.Instance!.IsServer)
             {
-                await BroadcastAsync(msg);
+                await NetworkManager.Instance.BroadcastAsync(msg);
             }
             else
             {
-                await SendToServerAsync(msg);
+                await NetworkManager.Instance.SendToServerAsync(msg);
             }
-        }
-
-        private ushort GetBehaviourId()
-        {
-            // Присвой ID поведению (расширь NetworkObject для хранения ID behaviours)
-            return 1; // Заглушка
         }
 
         internal void ApplySyncVar(ushort varId, byte[] value)
         {
             if (_syncVarSetters.TryGetValue(varId, out var setter))
+            {
                 setter(value);
+            }
         }
 
-
-
-
-
+        // === RPC ===
         private readonly Dictionary<ushort, MethodInfo> _rpcMethods = new();
         private ushort _nextRpcId = 1;
 
-        protected override void OnSpawn()
+        // === ЖИЗНЕННЫЙ ЦИКЛ ===
+        protected virtual void OnSpawn()
         {
-            // Регистрация RPC методов
+            RegisterRpcMethods();
+        }
+
+        protected virtual void OnDespawn() { }
+
+        internal void InvokeOnSpawn() => OnSpawn();
+        internal void InvokeOnDespawn() => OnDespawn();
+
+        private void RegisterRpcMethods()
+        {
             var methods = GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             foreach (var method in methods)
             {
-                if (method.GetCustomAttribute<ServerRpcAttribute>() != null || method.GetCustomAttribute<ClientRpcAttribute>() != null)
+                if (method.GetCustomAttribute<ServerRpcAttribute>() != null ||
+                    method.GetCustomAttribute<ClientRpcAttribute>() != null)
                 {
-                    var rpcId = _nextRpcId++;
-                    _rpcMethods[rpcId] = method;
+                    _rpcMethods[_nextRpcId++] = method;
                 }
             }
         }
 
-        // Вызов ServerRpc
+        // === RPC ВЫЗОВЫ ===
         protected async ValueTask CallServerRpc(string methodName, params object[] args)
         {
             if (!NetworkManager.Instance!.IsClient) return;
 
-            var method = GetType().GetMethod(methodName);
-            if (method?.GetCustomAttribute<ServerRpcAttribute>() == null) throw new InvalidOperationException("Not a ServerRpc.");
+            var method = GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (method?.GetCustomAttribute<ServerRpcAttribute>() == null)
+                throw new InvalidOperationException("Not a ServerRpc.");
 
-            var rpcId = GetRpcId(methodName); // Расширь для поиска ID по имени
-            var argsData = SerializeArgs(args); // Реализуй сериализацию (ниже)
-
-            var msg = new RpcMessage(NetworkObject!.NetworkId, GetBehaviourId(), rpcId, argsData);
-            await SendToServerAsync(msg);
-        }
-
-        // Вызов ClientRpc
-        protected async ValueTask CallClientRpc(string methodName, NetworkPlayer target, params object[] args)
-        {
-            if (!NetworkManager.Instance!.IsServer) return;
-
-            var method = GetType().GetMethod(methodName);
-            if (method?.GetCustomAttribute<ClientRpcAttribute>() == null) throw new InvalidOperationException("Not a ClientRpc.");
-
-            var rpcId = GetRpcId(methodName);
+            var rpcId = GetRpcId(method);
             var argsData = SerializeArgs(args);
 
             var msg = new RpcMessage(NetworkObject!.NetworkId, GetBehaviourId(), rpcId, argsData);
-            await SendToAsync(target, msg);
+            await NetworkManager.Instance.SendToServerAsync(msg);
         }
 
-        // Вызов ClientRpc на всех
+        protected async ValueTask CallClientRpc(NetworkPlayer target, string methodName, params object[] args)
+        {
+            if (!NetworkManager.Instance!.IsServer) return;
+
+            var method = GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (method?.GetCustomAttribute<ClientRpcAttribute>() == null)
+                throw new InvalidOperationException("Not a ClientRpc.");
+
+            var rpcId = GetRpcId(method);
+            var argsData = SerializeArgs(args);
+
+            var msg = new RpcMessage(NetworkObject!.NetworkId, GetBehaviourId(), rpcId, argsData);
+            await NetworkManager.Instance.SendToAsync(target, msg);
+        }
+
         protected async ValueTask BroadcastClientRpc(string methodName, params object[] args)
         {
             if (!NetworkManager.Instance!.IsServer) return;
 
-            var method = GetType().GetMethod(methodName);
-            if (method?.GetCustomAttribute<ClientRpcAttribute>() == null) throw new InvalidOperationException("Not a ClientRpc.");
+            var method = GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (method?.GetCustomAttribute<ClientRpcAttribute>() == null)
+                throw new InvalidOperationException("Not a ClientRpc.");
 
-            var rpcId = GetRpcId(methodName);
+            var rpcId = GetRpcId(method);
             var argsData = SerializeArgs(args);
 
             var msg = new RpcMessage(NetworkObject!.NetworkId, GetBehaviourId(), rpcId, argsData);
-            await BroadcastAsync(msg);
+            await NetworkManager.Instance.BroadcastAsync(msg);
         }
 
-        private ushort GetRpcId(string methodName)
+        private ushort GetRpcId(MethodInfo method)
         {
-            // Реализуй поиск ID по имени (или используй хеш)
-            return 1; // Заглушка
+            foreach (var kvp in _rpcMethods)
+            {
+                if (kvp.Value == method) return kvp.Key;
+            }
+            throw new InvalidOperationException("RPC method not registered.");
         }
 
         private byte[] SerializeArgs(object[] args)
@@ -174,11 +155,14 @@ namespace DokuzuNet.Integration
             writer.WriteUShort((ushort)args.Length);
             foreach (var arg in args)
             {
-                // Пример сериализации
-                if (arg is int i) writer.WriteInt(i);
-                else if (arg is float f) writer.WriteFloat(f);
-                else if (arg is string s) writer.WriteString(s);
-                // Расширь для других типов
+                switch (arg)
+                {
+                    case int i: writer.WriteInt(i); break;
+                    case float f: writer.WriteFloat(f); break;
+                    case string s: writer.WriteString(s); break;
+                    case uint u: writer.WriteUInt(u); break;
+                    default: throw new NotSupportedException($"Type {arg.GetType()} not supported in RPC.");
+                }
             }
             return writer.GetBuffer().ToArray();
         }
@@ -187,8 +171,9 @@ namespace DokuzuNet.Integration
         {
             if (_rpcMethods.TryGetValue(rpcId, out var method))
             {
-                var parameters = DeserializeArgs(method.GetParameters(), argsData);
-                method.Invoke(this, parameters);
+                var parameters = method.GetParameters();
+                var args = DeserializeArgs(parameters, argsData);
+                method.Invoke(this, args);
             }
         }
 
@@ -206,10 +191,17 @@ namespace DokuzuNet.Integration
                     Type t when t == typeof(int) => reader.ReadInt(),
                     Type t when t == typeof(float) => reader.ReadFloat(),
                     Type t when t == typeof(string) => reader.ReadString(),
+                    Type t when t == typeof(uint) => reader.ReadUInt(),
                     _ => throw new NotSupportedException($"Type {type} not supported.")
                 };
             }
             return args;
+        }
+
+        // === Вспомогательные ===
+        private ushort GetBehaviourId()
+        {
+            return 1;
         }
     }
 }

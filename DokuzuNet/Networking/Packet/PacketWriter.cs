@@ -59,6 +59,13 @@ namespace DokuzuNet.Networking.Packet
             _position += 4;
         }
 
+        public void WriteUInt(uint value)
+        {
+            EnsureCapacity(4);
+            BinaryPrimitives.WriteUInt32LittleEndian(_buffer.Span.Slice(_position), value);
+            _position += 4;
+        }
+
         public void WriteFloat(float value)
         {
             EnsureCapacity(4);
@@ -99,8 +106,6 @@ namespace DokuzuNet.Networking.Packet
         public void Dispose()
         {
             _owner?.Dispose();
-            _owner = null!;
-            _buffer = default;
         }
     }
 }

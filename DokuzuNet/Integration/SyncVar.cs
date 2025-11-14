@@ -2,14 +2,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace DokuzuNet.Integration
 {
-    public record SyncVar(uint ObjectId, ushort BehaviourId, ushort VarId, byte[] Value) : IMessage;
-
-    public class SyncVar<T> where T : struct // Для простоты — value types (int, float, bool, etc.)
+    public record SyncVarMessage(uint ObjectId, ushort BehaviourId, ushort VarId, byte[] Value) : IMessage;
+    public class SyncVar<T> where T : struct
     {
         private T _value;
         private readonly NetworkBehaviour _behaviour;
@@ -21,15 +21,15 @@ namespace DokuzuNet.Integration
             get => _value;
             set
             {
-                if (Equals(_value, value)) return;
+                if (EqualityComparer<T>.Default.Equals(_value, value)) return;
 
                 _value = value;
                 _onChanged?.Invoke(value);
 
+                // Отправляем только если мы владелец (клиент или сервер)
                 if (_behaviour.NetworkObject?.IsLocalOwned == true)
                 {
-                    // Отправка на сервер (или сразу броадкаст, если сервер)
-                    _behaviour.SendSyncVarAsync(_varId, _value);
+                    _behaviour.SendSyncVarAsync(_varId, value).ConfigureAwait(false);
                 }
             }
         }
@@ -45,6 +45,27 @@ namespace DokuzuNet.Integration
         internal void SetWithoutNotify(T value)
         {
             _value = value;
+        }
+
+        // Внутренний метод для десериализации
+        internal void SetFromBytes(byte[] data)
+        {
+            if (typeof(T) == typeof(int))
+            {
+                SetWithoutNotify(Unsafe.As<byte, T>(ref data[0]));
+            }
+            else if (typeof(T) == typeof(float))
+            {
+                SetWithoutNotify(Unsafe.As<byte, T>(ref data[0]));
+            }
+            else if (typeof(T) == typeof(uint))
+            {
+                SetWithoutNotify(Unsafe.As<byte, T>(ref data[0]));
+            }
+            else
+            {
+                throw new NotSupportedException($"SyncVar type {typeof(T)} not supported.");
+            }
         }
     }
 }

@@ -19,7 +19,6 @@ namespace DokuzuNet.Core
 
     public class NetworkManager
     {
-        // === Синглтон ===
         public static NetworkManager? Instance { get; private set; }
 
         private readonly ITransport _transport;
@@ -29,8 +28,13 @@ namespace DokuzuNet.Core
         public NetworkMode Mode { get; private set; } = NetworkMode.None;
         public bool IsServer => Mode == NetworkMode.Server || Mode == NetworkMode.Host;
         public bool IsClient => Mode == NetworkMode.Client || Mode == NetworkMode.Host;
+        public NetworkPlayer? LocalPlayer { get; private set; } // Fixed: added LocalPlayer
+        public IConnection? LocalConnection => _transport.GetLocalClientConnection();
 
         private readonly Dictionary<IConnection, NetworkPlayer> _players = new();
+        private readonly PrefabRegistry _prefabs = new();
+        private readonly Dictionary<uint, NetworkObject> _objects = new();
+        private uint _nextNetworkId = 1;
 
         public event Action<NetworkPlayer>? OnPlayerJoined;
         public event Action<NetworkPlayer>? OnPlayerLeft;
@@ -40,139 +44,22 @@ namespace DokuzuNet.Core
             if (Instance != null) throw new InvalidOperationException("NetworkManager already exists.");
             Instance = this;
 
-            _registry.Register<RpcMessage>();
-            _registry.On<RpcMessage>((player, msg) =>
-            {
-                if (_objects.TryGetValue(msg.ObjectId, out var obj))
-                {
-                    // Найди Behaviour по BehaviourId (расширь)
-                    var behaviour = obj.GetBehaviour<YourBehaviour>(); // Заглушка
-                    behaviour?.InvokeRpc(msg.RpcId, msg.Args);
-                }
-            });
-
-            _registry.Register<SpawnMessage>();
-            _registry.On<SpawnMessage>((player, msg) => HandleSpawn(msg));
-
-            // Регистрация префабов (добавь свои)
-            _prefabs.Register("PlayerPrefab");
-            _prefabs.Register("EnemyPrefab");
-
             _transport = transport;
             _transport.OnClientConnected += HandleClientConnected;
             _transport.OnClientDisconnected += HandleClientDisconnected;
             _transport.OnDataReceived += HandleDataReceived;
+
+            // Регистрация сообщений
+            _registry.Register<ChatMessage>();
+            _registry.Register<SpawnMessage>();
+            _registry.Register<SyncVarMessage>();
+            _registry.Register<RpcMessage>();
+
+            // Пример префабов
+            _prefabs.Register("PlayerPrefab");
         }
 
-        // === СТАРТ ===
-
-        public async Task StartServerAsync(int port, CancellationToken ct = default)
-        {
-            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
-            Mode = NetworkMode.Server;
-            await _transport.StartServerAsync(port, ct);
-            Logger.Info("[NET] Server started");
-        }
-
-        public async Task StartClientAsync(string ip, int port, CancellationToken ct = default)
-        {
-            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
-            Mode = NetworkMode.Client;
-            await _transport.StartClientAsync(ip, port, ct);
-            Logger.Info("[NET] Client connected");
-        }
-
-        public async Task StartHostAsync(int port, CancellationToken ct = default)
-        {
-            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
-            Mode = NetworkMode.Host;
-
-            await _transport.StartServerAsync(port, ct);
-            await _transport.StartClientAsync("127.0.0.1", port, ct);
-
-            // Локальный игрок
-            var localConn = _transport.GetLocalClientConnection();
-            if (localConn != null)
-            {
-                var player = new NetworkPlayer(localConn);
-                _players[localConn] = player;
-                OnPlayerJoined?.Invoke(player);
-            }
-
-            Logger.Info("[NET] Host started");
-        }
-
-        // === ОТПРАВКА ===
-
-        public async ValueTask SendToServerAsync<T>(T message, CancellationToken ct = default) where T : IMessage
-        {
-            if (!IsClient) throw new InvalidOperationException("Not a client.");
-            var data = _registry.Serialize(message);
-            var conn = _transport.GetLocalClientConnection() ?? throw new InvalidOperationException("No local connection.");
-            await _transport.SendToAsync(conn, data, ct);
-        }
-
-        public async ValueTask SendToAsync<T>(NetworkPlayer player, T message, CancellationToken ct = default) where T : IMessage
-        {
-            if (!IsServer) throw new InvalidOperationException("Not a server.");
-            var data = _registry.Serialize(message);
-            await _transport.SendToAsync(player.Connection, data, ct);
-        }
-
-        public async ValueTask BroadcastAsync<T>(T message, bool includeLocal = true, CancellationToken ct = default) where T : IMessage
-        {
-            if (!IsServer) throw new InvalidOperationException("Not a server.");
-            var data = _registry.Serialize(message);
-            await _transport.BroadcastAsync(data, includeLocal, ct);
-        }
-
-        // === ОБРАБОТКА ===
-
-        private void HandleClientConnected(IConnection connection)
-        {
-            var player = new NetworkPlayer(connection);
-            _players[connection] = player;
-            OnPlayerJoined?.Invoke(player);
-        }
-
-        private void HandleClientDisconnected(IConnection connection)
-        {
-            if (_players.TryGetValue(connection, out var player))
-            {
-                _players.Remove(connection);
-                OnPlayerLeft?.Invoke(player);
-            }
-        }
-
-        private void HandleDataReceived((IConnection connection, ReadOnlyMemory<byte> data) packet)
-        {
-            var msg = _registry.Deserialize(packet.data);
-            if (msg == null) return;
-
-            var player = _players.GetValueOrDefault(packet.connection);
-            if (player == null) return;
-
-            // Рассылаем по типу
-            if (_messageHandlers.TryGetValue(msg.GetType(), out var handler))
-            {
-                handler.DynamicInvoke(player, msg);
-            }
-        }
-
-        // === СТОП ===
-
-        public async Task StopAsync(CancellationToken ct = default)
-        {
-            if (Mode == NetworkMode.None) return;
-
-            await _transport.StopAsync(ct);
-            _players.Clear();
-            Mode = NetworkMode.None;
-            Instance = null;
-            Logger.Info("[NET] Stopped");
-        }
-
-        // === ПОДПИСКА НА СООБЩЕНИЯ ===
+        // === ПОДПИСКА ===
         public void AddHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
         {
             var type = typeof(T);
@@ -199,22 +86,97 @@ namespace DokuzuNet.Core
             }
         }
 
-        // === УТИЛИТЫ ===
+        // === СТАРТ ===
+        public async Task StartServerAsync(int port, CancellationToken ct = default)
+        {
+            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
+            Mode = NetworkMode.Server;
+            await _transport.StartServerAsync(port, ct);
+        }
 
-        public IReadOnlyCollection<NetworkPlayer> Players => _players.Values;
-        public NetworkPlayer? GetPlayer(IConnection conn) => _players.GetValueOrDefault(conn);
+        public async Task StartClientAsync(string ip, int port, CancellationToken ct = default)
+        {
+            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
+            Mode = NetworkMode.Client;
+            await _transport.StartClientAsync(ip, port, ct);
+            LocalPlayer = new NetworkPlayer(_transport.GetLocalClientConnection()!); // Fixed: set LocalPlayer
+        }
 
+        public async Task StartHostAsync(int port, CancellationToken ct = default)
+        {
+            if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
+            Mode = NetworkMode.Host;
 
+            await _transport.StartServerAsync(port, ct);
+            await _transport.StartClientAsync("127.0.0.1", port, ct);
 
-    
+            LocalPlayer = new NetworkPlayer(_transport.GetLocalClientConnection()!); // Fixed
+            _players[LocalPlayer.Connection] = LocalPlayer;
+            OnPlayerJoined?.Invoke(LocalPlayer);
+        }
 
+        // === ОТПРАВКА ===
+        public async ValueTask SendToServerAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+        {
+            if (!IsClient) throw new InvalidOperationException("Not a client.");
+            var data = _registry.Serialize(message);
+            var conn = _transport.GetLocalClientConnection() ?? throw new InvalidOperationException("No local connection.");
+            await _transport.SendToAsync(conn, data, ct);
+        }
 
+        public async ValueTask SendToAsync<T>(NetworkPlayer player, T message, CancellationToken ct = default) where T : IMessage
+        {
+            if (!IsServer) throw new InvalidOperationException("Not a server.");
+            var data = _registry.Serialize(message);
+            await _transport.SendToAsync(player.Connection, data, ct);
+        }
 
+        public async ValueTask BroadcastAsync<T>(T message, bool includeLocal = true, CancellationToken ct = default) where T : IMessage
+        {
+            if (!IsServer) throw new InvalidOperationException("Not a server.");
+            var data = _registry.Serialize(message);
+            await _transport.BroadcastAsync(data, includeLocal, ct);
+        }
 
+        // === ОБРАБОТКА ===
+        private void HandleClientConnected(IConnection connection)
+        {
+            var player = new NetworkPlayer(connection);
+            _players[connection] = player;
+            OnPlayerJoined?.Invoke(player);
+        }
 
-    private readonly PrefabRegistry _prefabs = new();
-        private readonly Dictionary<uint, NetworkObject> _objects = new();
-        private uint _nextNetworkId = 1;
+        private void HandleClientDisconnected(IConnection connection)
+        {
+            if (_players.TryGetValue(connection, out var player))
+            {
+                _players.Remove(connection);
+                OnPlayerLeft?.Invoke(player);
+            }
+        }
+
+        private void HandleDataReceived((IConnection connection, ReadOnlyMemory<byte> data) packet)
+        {
+            var msg = _registry.Deserialize(packet.data);
+            if (msg == null) return;
+
+            var player = _players.GetValueOrDefault(packet.connection);
+            if (player == null) return;
+
+            // Fixed: Dispatch with cast
+            if (_messageHandlers.TryGetValue(msg.GetType(), out var handler))
+            {
+                if (handler is Action<NetworkPlayer, ChatMessage> chatHandler && msg is ChatMessage chatMsg)
+                    chatHandler(player, chatMsg);
+                else if (handler is Action<NetworkPlayer, SpawnMessage> spawnHandler && msg is SpawnMessage spawnMsg)
+                    spawnHandler(player, spawnMsg);
+                else if (handler is Action<NetworkPlayer, SyncVarMessage> syncHandler && msg is SyncVarMessage syncMsg)
+                    syncHandler(player, syncMsg);
+                else if (handler is Action<NetworkPlayer, RpcMessage> rpcHandler && msg is RpcMessage rpcMsg)
+                    rpcHandler(player, rpcMsg);
+                // Расширь для других
+            }
+        }
 
         // === SPAWN ===
         public async Task<NetworkObject> SpawnAsync(string prefabName, NetworkPlayer owner, float x = 0, float y = 0, float z = 0)
@@ -230,57 +192,27 @@ namespace DokuzuNet.Core
 
             _objects[netId] = obj;
 
-            // Отправка на все клиенты
-            var msg = new SpawnMessage(prefabId, netId, owner.Connection.EndPoint.Port, x, y, z); // OwnerId — пример Port
+            var msg = new SpawnMessage(prefabId, netId, (uint)owner.Connection.EndPoint.Port, x, y, z); // Fixed OwnerId
             await BroadcastAsync(msg);
 
             obj.OnSpawn();
             return obj;
         }
 
-        // === DESPAWN ===
-        public async Task DespawnAsync(NetworkObject obj)
+        // === СТОП ===
+        public async Task StopAsync(CancellationToken ct = default)
         {
-            if (!IsServer) throw new InvalidOperationException("Only server can despawn.");
+            if (Mode == NetworkMode.None) return;
 
-            if (_objects.Remove(obj.NetworkId))
-            {
-                obj.OnDespawn();
-
-                // Отправка DespawnMessage (добавь аналогично SpawnMessage)
-                var msg = new DespawnMessage(obj.NetworkId);
-                await BroadcastAsync(msg);
-            }
+            await _transport.StopAsync(ct);
+            _players.Clear();
+            _objects.Clear();
+            Mode = NetworkMode.None;
+            Instance = null;
+            LocalPlayer = null;
         }
 
-        // === ОБРАБОТКА SPAWN ===
-        private void HandleSpawn(SpawnMessage msg)
-        {
-            var prefabName = _prefabs.GetPrefab(msg.PrefabId);
-            if (string.IsNullOrEmpty(prefabName)) return;
-
-            var owner = Players.FirstOrDefault(p => p.Connection.EndPoint.Port == msg.OwnerId); // Пример поиска owner
-
-            var obj = new NetworkObject();
-            obj.Initialize(msg.NetworkId, owner ?? LocalPlayer);
-
-            _objects[msg.NetworkId] = obj;
-            obj.OnSpawn();
-
-            // Создай локальный объект (в игре — Instantiate(prefabName))
-            Console.WriteLine($"Spawned {prefabName} at ({msg.X}, {msg.Y}, {msg.Z})");
-        }
-
-        // В конструкторе
-        public NetworkManager(ITransport transport)
-        {
-            // ... (как раньше)
-
-            // Регистрация сообщений
-            
-        }
-
-        // Добавь DespawnMessage и обработку
-
+        public IReadOnlyCollection<NetworkPlayer> Players => _players.Values.ToList().AsReadOnly();
+        public NetworkPlayer? GetPlayer(IConnection conn) => _players.GetValueOrDefault(conn);
     }
 }

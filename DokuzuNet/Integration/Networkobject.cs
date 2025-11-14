@@ -38,14 +38,14 @@ namespace DokuzuNet.Integration
             behaviour.NetworkObject = this;
             _behaviours.Add(behaviour);
             if (IsSpawned)
-                behaviour.OnSpawn();
+                behaviour.InvokeOnSpawn();
         }
 
         internal void OnSpawn()
         {
             foreach (var b in _behaviours)
             {
-                b.OnSpawn();
+                b.InvokeOnSpawn(); // Используем внутренний метод
             }
         }
 
@@ -53,7 +53,7 @@ namespace DokuzuNet.Integration
         {
             foreach (var b in _behaviours)
             {
-                b.OnDespawn();
+                b.InvokeOnDespawn();
             }
             IsSpawned = false;
         }
