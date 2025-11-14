@@ -60,31 +60,31 @@ namespace DokuzuNet.Core
         }
 
         // === ПОДПИСКА ===
-        public void AddHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
-        {
-            var type = typeof(T);
-            if (_messageHandlers.TryGetValue(type, out var existing))
-            {
-                _messageHandlers[type] = Delegate.Combine(existing, handler);
-            }
-            else
-            {
-                _messageHandlers[type] = handler;
-            }
-        }
+        //public void AddHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
+        //{
+        //    var type = typeof(T);
+        //    if (_messageHandlers.TryGetValue(type, out var existing))
+        //    {
+        //        _messageHandlers[type] = Delegate.Combine(existing, handler);
+        //    }
+        //    else
+        //    {
+        //        _messageHandlers[type] = handler;
+        //    }
+        //}
 
-        public void RemoveHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
-        {
-            var type = typeof(T);
-            if (_messageHandlers.TryGetValue(type, out var existing))
-            {
-                var newDelegate = Delegate.Remove(existing, handler);
-                if (newDelegate == null)
-                    _messageHandlers.Remove(type);
-                else
-                    _messageHandlers[type] = newDelegate;
-            }
-        }
+        //public void RemoveHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
+        //{
+        //    var type = typeof(T);
+        //    if (_messageHandlers.TryGetValue(type, out var existing))
+        //    {
+        //        var newDelegate = Delegate.Remove(existing, handler);
+        //        if (newDelegate == null)
+        //            _messageHandlers.Remove(type);
+        //        else
+        //            _messageHandlers[type] = newDelegate;
+        //    }
+        //}
 
         // === СТАРТ ===
         public async Task StartServerAsync(int port, CancellationToken ct = default)

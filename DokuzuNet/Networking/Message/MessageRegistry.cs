@@ -38,6 +38,19 @@ namespace DokuzuNet.Networking.Message
             }
         }
 
+        public void RemoveHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
+        {
+            var type = typeof(T);
+            if (_handlers.TryGetValue(type, out var existing))
+            {
+                var newDelegate = Delegate.Remove(existing, handler);
+                if (newDelegate == null)
+                    _handlers.Remove(type);
+                else
+                    _handlers[type] = newDelegate;
+            }
+        }
+
         public ReadOnlyMemory<byte> Serialize<T>(T message) where T : IMessage
         {
             using var writer = new PacketWriter();
