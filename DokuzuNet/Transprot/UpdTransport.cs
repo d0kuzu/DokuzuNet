@@ -117,7 +117,7 @@ namespace DokuzuNet.Transprot
                         OnError?.Invoke(ex);
                     }
                 }
-            }, token); // Fixed: Task.Run to avoid CS1998
+            }, token);
         }
 
         private async Task HandlePacketAsync(byte[] buffer, IPEndPoint remote, CancellationToken token)
@@ -156,7 +156,7 @@ namespace DokuzuNet.Transprot
                 return;
             }
 
-            // Обновление активности
+            // Activity update
             if (_isServer && _connections.TryGetValue(remote, out var serverConn))
             {
                 serverConn.UpdateLastReceived();
@@ -167,7 +167,7 @@ namespace DokuzuNet.Transprot
                 _localClientConnection.UpdateLastReceived();
             }
 
-            // Данные
+            // Data
             var connection = _isServer
                 ? _connections.GetOrAdd(remote, _ => new UdpConnection(_udpClient!, remote))
                 : _localClientConnection!;
@@ -175,7 +175,7 @@ namespace DokuzuNet.Transprot
             OnDataReceived?.Invoke((connection, memory));
         }
 
-        // === СТОП ===
+        // === STOP ===
         public async Task StopAsync(CancellationToken ct = default)
         {
             if (!_isRunning) return;
@@ -217,7 +217,7 @@ namespace DokuzuNet.Transprot
             catch { }
         }
 
-        // === УТИЛИТЫ ===
+        // === UTILITY ===
         public IReadOnlyCollection<IConnection> GetConnections() => _connections.Values.ToList().AsReadOnly();
         public IConnection? GetLocalClientConnection() => _localClientConnection;
     }

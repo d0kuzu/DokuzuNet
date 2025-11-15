@@ -12,6 +12,10 @@ namespace DokuzuNet.Utils
         {
             Console.WriteLine($"[INFO] {msg}");
         }
+        public static void Warn(string msg)
+        {
+            Console.WriteLine($"[WARN] {msg}");
+        }
 
         public static void Error(string msg)
         {

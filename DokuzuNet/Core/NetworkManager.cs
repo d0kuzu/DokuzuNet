@@ -23,7 +23,6 @@ namespace DokuzuNet.Core
 
         private readonly ITransport _transport;
         private readonly MessageRegistry _registry = new();
-        private readonly Dictionary<Type, Delegate> _messageHandlers = new();
 
         public NetworkMode Mode { get; private set; } = NetworkMode.None;
         public bool IsServer => Mode == NetworkMode.Server || Mode == NetworkMode.Host;
@@ -57,36 +56,83 @@ namespace DokuzuNet.Core
             _registry.Register<SyncVarMessage>();
             _registry.Register<RpcMessage>();
 
+            // Message handlers registration
+            _registry.On<ChatMessage>(HandleChatMessage);
+            _registry.On<SpawnMessage>(HandleSpawnMessage);
+            _registry.On<SyncVarMessage>(HandleSyncVarMessage);
+            _registry.On<RpcMessage>(HandleRpcMessage);
+
             // Prefab registration (example)
             _prefabs.Register("PlayerPrefab");
         }
 
         // === SUBSCRIPTION ===
-        //public void AddHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
-        //{
-        //    var type = typeof(T);
-        //    if (_messageHandlers.TryGetValue(type, out var existing))
-        //    {
-        //        _messageHandlers[type] = Delegate.Combine(existing, handler);
-        //    }
-        //    else
-        //    {
-        //        _messageHandlers[type] = handler;
-        //    }
-        //}
+        private void HandleChatMessage(NetworkPlayer player, ChatMessage msg)
+        {
+            Logger.Info($"{player.Connection.EndPoint}: {msg.Text}");
 
-        //public void RemoveHandler<T>(Action<NetworkPlayer, T> handler) where T : IMessage
-        //{
-        //    var type = typeof(T);
-        //    if (_messageHandlers.TryGetValue(type, out var existing))
-        //    {
-        //        var newDelegate = Delegate.Remove(existing, handler);
-        //        if (newDelegate == null)
-        //            _messageHandlers.Remove(type);
-        //        else
-        //            _messageHandlers[type] = newDelegate;
-        //    }
-        //}
+            if (IsServer)
+            {
+                _ = BroadcastAsync(msg);
+            }
+        }
+
+        private void HandleSpawnMessage(NetworkPlayer player, SpawnMessage msg)
+        {
+            if (!IsServer)
+            {
+                var prefabName = _prefabs.GetPrefab(msg.PrefabId);
+                if (string.IsNullOrEmpty(prefabName))
+                {
+                    Logger.Warn($"Unknown prefab ID: {msg.PrefabId}");
+                    return;
+                }
+
+                var owner = _players.Values.FirstOrDefault(p => p.Connection.EndPoint.Port == (int)msg.OwnerId);
+                if (owner == null)
+                {
+                    Logger.Warn($"Spawn owner not found: {msg.OwnerId}");
+                    return;
+                }
+
+                var netObj = new NetworkObject();
+                netObj.Initialize(msg.NetworkId, owner);
+
+                _objects[msg.NetworkId] = netObj;
+
+                Logger.Info($"{prefabName} (ID: {msg.NetworkId}) at ({msg.X:F1}, {msg.Y:F1}, {msg.Z:F1})");
+
+                netObj.OnSpawn();
+            }
+        }
+
+        private void HandleSyncVarMessage(NetworkPlayer player, SyncVarMessage msg)
+        {
+            if (_objects.TryGetValue(msg.ObjectId, out var netObj))
+            {
+                var behaviour = netObj.GetBehaviours().FirstOrDefault(); // TODO: get by BehaviourId
+
+                if (behaviour != null)
+                {
+                    behaviour.ApplySyncVar(msg.VarId, msg.Value);
+                    Logger.Debug($"[SYNCVAR] Object {msg.ObjectId} Var {msg.VarId} updated");
+                }
+            }
+        }
+
+        private void HandleRpcMessage(NetworkPlayer player, RpcMessage msg)
+        {
+            if (_objects.TryGetValue(msg.ObjectId, out var netObj))
+            {
+                var behaviour = netObj.GetBehaviours().FirstOrDefault();
+
+                if (behaviour != null)
+                {
+                    behaviour.InvokeRpc(msg.RpcId, msg.Args);
+                    Logger.Debug($"[RPC] Object {msg.ObjectId} Rpc {msg.RpcId} invoked");
+                }
+            }
+        }
 
         // === START ===
         public async Task StartServerAsync(int port, CancellationToken ct = default)
@@ -178,17 +224,7 @@ namespace DokuzuNet.Core
             var player = _players.GetValueOrDefault(packet.connection);
             if (player == null) return;
 
-            if (_messageHandlers.TryGetValue(msg.GetType(), out var handler))
-            {
-                if (handler is Action<NetworkPlayer, ChatMessage> chatHandler && msg is ChatMessage chatMsg)
-                    chatHandler(player, chatMsg);
-                else if (handler is Action<NetworkPlayer, SpawnMessage> spawnHandler && msg is SpawnMessage spawnMsg)
-                    spawnHandler(player, spawnMsg);
-                else if (handler is Action<NetworkPlayer, SyncVarMessage> syncHandler && msg is SyncVarMessage syncMsg)
-                    syncHandler(player, syncMsg);
-                else if (handler is Action<NetworkPlayer, RpcMessage> rpcHandler && msg is RpcMessage rpcMsg)
-                    rpcHandler(player, rpcMsg);
-            }
+            _registry.Dispatch(msg, player);
         }
 
         // === SPAWN ===
