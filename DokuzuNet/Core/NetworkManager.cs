@@ -132,11 +132,17 @@ namespace DokuzuNet.Core
             await _transport.SendToAsync(player.Connection, data, ct);
         }
 
-        public async ValueTask BroadcastAsync<T>(T message, bool includeLocal = true, CancellationToken ct = default) where T : IMessage
+        public async ValueTask BroadcastAsync<T>(T message, CancellationToken ct = default) where T : IMessage
         {
             if (!IsServer) throw new InvalidOperationException("Not a server.");
+
             var data = _registry.Serialize(message);
-            await _transport.BroadcastAsync(data, includeLocal, ct);
+            await _transport.BroadcastAsync(data, ct);
+
+            if (Mode == NetworkMode.Host && LocalConnection != null)
+            {
+                await _transport.SendToAsync(LocalConnection, data, ct);
+            }
         }
 
         // === PROCESSING ===
@@ -172,7 +178,6 @@ namespace DokuzuNet.Core
             var player = _players.GetValueOrDefault(packet.connection);
             if (player == null) return;
 
-            // Fixed: Dispatch with cast
             if (_messageHandlers.TryGetValue(msg.GetType(), out var handler))
             {
                 if (handler is Action<NetworkPlayer, ChatMessage> chatHandler && msg is ChatMessage chatMsg)
@@ -183,7 +188,6 @@ namespace DokuzuNet.Core
                     syncHandler(player, syncMsg);
                 else if (handler is Action<NetworkPlayer, RpcMessage> rpcHandler && msg is RpcMessage rpcMsg)
                     rpcHandler(player, rpcMsg);
-                // Расширь для других
             }
         }
 
@@ -208,7 +212,7 @@ namespace DokuzuNet.Core
             return obj;
         }
 
-        // === СТОП ===
+        // === STOP ===
         public async Task StopAsync(CancellationToken ct = default)
         {
             if (Mode == NetworkMode.None) return;
