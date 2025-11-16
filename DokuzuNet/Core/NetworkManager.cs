@@ -115,7 +115,7 @@ namespace DokuzuNet.Core
                 if (behaviour != null)
                 {
                     behaviour.ApplySyncVar(msg.VarId, msg.Value);
-                    Logger.Debug($"[SYNCVAR] Object {msg.ObjectId} Var {msg.VarId} updated");
+                    Logger.Info($"Object {msg.ObjectId} Var {msg.VarId} updated");
                 }
             }
         }
@@ -129,7 +129,7 @@ namespace DokuzuNet.Core
                 if (behaviour != null)
                 {
                     behaviour.InvokeRpc(msg.RpcId, msg.Args);
-                    Logger.Debug($"[RPC] Object {msg.ObjectId} Rpc {msg.RpcId} invoked");
+                    Logger.Info($"Object {msg.ObjectId} Rpc {msg.RpcId} invoked");
                 }
             }
         }

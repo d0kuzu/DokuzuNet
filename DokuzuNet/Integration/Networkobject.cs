@@ -33,6 +33,11 @@ namespace DokuzuNet.Integration
             return null;
         }
 
+        public IEnumerable<NetworkBehaviour> GetBehaviours()
+        {
+            return _behaviours;
+        }
+
         internal void AddBehaviour(NetworkBehaviour behaviour)
         {
             behaviour.NetworkObject = this;
