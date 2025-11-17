@@ -1,4 +1,5 @@
 ﻿using DokuzuNet.Integration;
+using DokuzuNet.Networking.Message.Messages;
 using DokuzuNet.Networking.Packet;
 using System;
 using System.Collections.Generic;

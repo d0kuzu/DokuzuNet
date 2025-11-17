@@ -7,7 +7,9 @@ using System.Threading.Tasks;
 using DokuzuNet.Core;
 using DokuzuNet.Networking;
 using DokuzuNet.Networking.Message;
+using DokuzuNet.Networking.Message.Messages;
 using DokuzuNet.Networking.Packet;
+using DokuzuNet.Utils;
 
 namespace DokuzuNet.Integration
 {

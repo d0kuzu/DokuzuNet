@@ -1,6 +1,6 @@
 ﻿using DokuzuNet.Core;
 using DokuzuNet.Core.Connection;
-using DokuzuNet.Networking.Message;
+using DokuzuNet.Networking.Message.Messages;
 using System;
 using System.Collections.Generic;
 using System.Linq;

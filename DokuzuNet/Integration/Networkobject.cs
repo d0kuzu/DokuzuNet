@@ -39,7 +39,7 @@ namespace DokuzuNet.Integration
             return _behaviours;
         }
 
-        internal void AddBehaviour(NetworkBehaviour behaviour)
+        public void AddBehaviour(NetworkBehaviour behaviour)
         {
             behaviour.NetworkObject = this;
             behaviour.BehaviourId = _nextBehaviourId++;

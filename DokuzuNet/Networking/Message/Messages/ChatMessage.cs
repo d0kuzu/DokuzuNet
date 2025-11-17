@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace DokuzuNet.Networking.Message
+namespace DokuzuNet.Networking.Message.Messages
 {
     public record ChatMessage(string Text, string Sender = "") : IMessage;
 }

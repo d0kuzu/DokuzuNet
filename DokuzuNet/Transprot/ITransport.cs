@@ -10,9 +10,9 @@ namespace DokuzuNet.Transprot
     public interface ITransport : IDisposable
     {
         Task StartServerAsync(int port, CancellationToken ct = default);
-        Task StartClientAsync(string serverIp, int serverPort, bool isHost = false, CancellationToken ct = default);
+        Task StartClientAsync(string serverIp, int serverPort, CancellationToken ct = default);
         ValueTask SendToAsync(IConnection connection, ReadOnlyMemory<byte> data, CancellationToken ct = default);
-        ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default);
+        ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, bool includeLocalClient = true, CancellationToken ct = default);
         Task StopAsync(CancellationToken ct = default);
 
         event Action<IConnection>? OnClientConnected;

@@ -2,6 +2,7 @@
 using DokuzuNet.Integration;
 using DokuzuNet.Networking;
 using DokuzuNet.Networking.Message;
+using DokuzuNet.Networking.Message.Messages;
 using DokuzuNet.Transprot;
 using DokuzuNet.Utils;
 using System;
@@ -24,16 +25,18 @@ namespace DokuzuNet.Core
         private readonly ITransport _transport;
         private readonly MessageRegistry _registry = new();
 
+        private readonly Dictionary<IConnection, NetworkPlayer> _players = new();
+        private readonly PrefabRegistry _prefabs = new();
+        private readonly Dictionary<uint, NetworkObject> _objects = new();
+        private uint _nextNetworkId = 1;
+
         public NetworkMode Mode { get; private set; } = NetworkMode.None;
         public bool IsServer => Mode == NetworkMode.Server || Mode == NetworkMode.Host;
         public bool IsClient => Mode == NetworkMode.Client || Mode == NetworkMode.Host;
         public NetworkPlayer? LocalPlayer { get; private set; }
         public IConnection? LocalConnection => _transport.GetLocalClientConnection();
-
-        private readonly Dictionary<IConnection, NetworkPlayer> _players = new();
-        private readonly PrefabRegistry _prefabs = new();
-        private readonly Dictionary<uint, NetworkObject> _objects = new();
-        private uint _nextNetworkId = 1;
+        public PrefabRegistry Prefabs => _prefabs;
+        public IReadOnlyDictionary<uint, NetworkObject> Objects => _objects;
 
         public event Action<NetworkPlayer>? OnPlayerJoined;
         public event Action<NetworkPlayer>? OnPlayerLeft;
@@ -53,12 +56,14 @@ namespace DokuzuNet.Core
             // Messages registration
             _registry.Register<ChatMessage>();
             _registry.Register<SpawnMessage>();
+            _registry.Register<DespawnMessage>();
             _registry.Register<SyncVarMessage>();
             _registry.Register<RpcMessage>();
 
             // Message handlers registration
             _registry.On<ChatMessage>(HandleChatMessage);
             _registry.On<SpawnMessage>(HandleSpawnMessage);
+            _registry.On<DespawnMessage>(HandleDespawnMessage);
             _registry.On<SyncVarMessage>(HandleSyncVarMessage);
             _registry.On<RpcMessage>(HandleRpcMessage);
 
@@ -73,7 +78,7 @@ namespace DokuzuNet.Core
 
             if (IsServer)
             {
-                _ = BroadcastAsync(msg);
+                _ = BroadcastAsync(msg, false);
             }
         }
 
@@ -87,8 +92,8 @@ namespace DokuzuNet.Core
                     Logger.Warn($"Unknown prefab ID: {msg.PrefabId}");
                     return;
                 }
-
-                var owner = _players.Values.FirstOrDefault(p => p.Connection.EndPoint.Port == (int)msg.OwnerId);
+                
+                var owner = _players.Values.FirstOrDefault();
                 if (owner == null)
                 {
                     Logger.Warn($"Spawn owner not found: {msg.OwnerId}");
@@ -103,6 +108,23 @@ namespace DokuzuNet.Core
                 Logger.Info($"Spawned {prefabName} (ID: {msg.NetworkId}) at ({msg.X:F1}, {msg.Y:F1}, {msg.Z:F1})");
 
                 netObj.OnSpawn();
+            }
+        }
+
+        private void HandleDespawnMessage(NetworkPlayer player, DespawnMessage msg)
+        {
+            if (!IsServer)
+            {
+                if (_objects.TryGetValue(msg.NetworkId, out var obj))
+                {
+                    _objects.Remove(obj.NetworkId);
+                    obj.OnDespawn();
+                    Logger.Info($"Object ID {msg.NetworkId} removed");
+                }
+                else
+                {
+                    Logger.Warn($"Object ID {msg.NetworkId} not found");
+                }
             }
         }
 
@@ -150,7 +172,7 @@ namespace DokuzuNet.Core
         {
             if (Mode != NetworkMode.None) throw new InvalidOperationException("Already started.");
             Mode = NetworkMode.Client;
-            await _transport.StartClientAsync(ip, port, false, ct);
+            await _transport.StartClientAsync(ip, port, ct);
         }
 
         public async Task StartHostAsync(int port, CancellationToken ct = default)
@@ -159,7 +181,7 @@ namespace DokuzuNet.Core
             Mode = NetworkMode.Host;
 
             await _transport.StartServerAsync(port, ct);
-            await _transport.StartClientAsync("127.0.0.1", port, true, ct);
+            await _transport.StartClientAsync("127.0.0.1", port, ct);
 
             LocalPlayer = new NetworkPlayer(_transport.GetLocalClientConnection()!);
             _players[LocalPlayer.Connection] = LocalPlayer;
@@ -182,12 +204,12 @@ namespace DokuzuNet.Core
             await _transport.SendToAsync(player.Connection, data, ct);
         }
 
-        public async ValueTask BroadcastAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+        public async ValueTask BroadcastAsync<T>(T message, bool includeLocalClient = true, CancellationToken ct = default) where T : IMessage
         {
             if (!IsServer) throw new InvalidOperationException("Not a server.");
 
             var data = _registry.Serialize(message);
-            await _transport.BroadcastAsync(data, ct);
+            await _transport.BroadcastAsync(data, includeLocalClient, ct);
 
             if (Mode == NetworkMode.Host && LocalConnection != null)
             {
@@ -250,6 +272,18 @@ namespace DokuzuNet.Core
 
             obj.OnSpawn();
             return obj;
+        }
+
+        public async Task DespawnAsync(NetworkObject obj)
+        {
+            if (!IsServer) throw new InvalidOperationException("Only server can despawn.");
+
+            if (_objects.Remove(obj.NetworkId))
+            {
+                obj.OnDespawn();
+                var msg = new DespawnMessage(obj.NetworkId);
+                await BroadcastAsync(msg);
+            }
         }
 
         // === STOP ===

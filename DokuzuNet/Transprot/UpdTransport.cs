@@ -28,6 +28,7 @@ namespace DokuzuNet.Transprot
         public event Action<Exception>? OnError;
 
         private bool _isServer = false;
+        private bool _isClient = false;
         private bool _isRunning = false;
 
         // === START ===
@@ -40,16 +41,24 @@ namespace DokuzuNet.Transprot
             return InitializeAsync(ct);
         }
 
-        public Task StartClientAsync(string serverIp, int serverPort, bool isHost = false, CancellationToken ct = default)
+        public Task StartClientAsync(string serverIp, int serverPort, CancellationToken ct = default)
         {
-            if (_isRunning) throw new InvalidOperationException("Transport already running.");
+            if (_isRunning && !_isServer) throw new InvalidOperationException("Transport already running.");
 
-            _isServer = isHost;
+            _isClient = true;
             var ip = IPAddress.Parse(serverIp);
             _serverEndPoint = new IPEndPoint(ip, serverPort);
-            _localEndPoint = new IPEndPoint(IPAddress.Any, 0);
 
-            return InitializeAsync(ct);
+            if (!_isRunning)
+            {
+                _localEndPoint = new IPEndPoint(IPAddress.Any, 0);
+                return InitializeAsync(ct);
+            }
+            else
+            {
+                _localClientConnection = new UdpConnection(_udpClient!, _serverEndPoint);
+                return SendConnectAsync();
+            }
         }
 
         private Task InitializeAsync(CancellationToken ct)
@@ -59,7 +68,7 @@ namespace DokuzuNet.Transprot
             _isRunning = true;
             _receiveTask = ReceiveLoopAsync(_cts.Token);
 
-            if (!_isServer && _serverEndPoint != null)
+            if (_isClient && _serverEndPoint != null)
             {
                 _localClientConnection = new UdpConnection(_udpClient, _serverEndPoint);
                 SendConnectAsync().GetAwaiter().GetResult();
@@ -71,7 +80,7 @@ namespace DokuzuNet.Transprot
         private async Task SendConnectAsync()
         {
             if (_localClientConnection == null) return;
-            var data = new byte[] { 0x01 }; // CONNECT = 0x01
+            var data = new byte[] { 0x01 }; // CONNECT
             await _localClientConnection.SendAsync(data, _cts!.Token);
         }
 
@@ -84,10 +93,12 @@ namespace DokuzuNet.Transprot
             return udpConn.SendAsync(data, ct);
         }
 
-        public async ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, CancellationToken ct = default)
+        public async ValueTask BroadcastAsync(ReadOnlyMemory<byte> data, bool includeLocalClient = true, CancellationToken ct = default)
         {
+            if (!_isServer) throw new InvalidOperationException("Not in server mode.");
+
             var tasks = _connections.Values
-                .Where(c => !IPAddress.IsLoopback(c.EndPoint.Address))
+                .Where(c => includeLocalClient || !IPAddress.IsLoopback(c.EndPoint.Address))
                 .Select(c => c.SendAsync(data, ct).AsTask())
                 .ToArray();
 
@@ -123,6 +134,12 @@ namespace DokuzuNet.Transprot
         private async Task HandlePacketAsync(byte[] buffer, IPEndPoint remote, CancellationToken token)
         {
             var memory = new ReadOnlyMemory<byte>(buffer);
+
+            if (_isServer && _isClient && IPAddress.IsLoopback(remote.Address) && remote.Port == _localEndPoint!.Port)
+            {
+                // Self-packet — пропустить, чтобы избежать цикла
+                return;
+            }
 
             // CONNECT
             if (buffer.Length == 1 && buffer[0] == 0x01 && _isServer)
