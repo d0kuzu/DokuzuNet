@@ -16,6 +16,7 @@ namespace DokuzuNet.Integration
         public bool IsLocalOwned => Owner == NetworkManager.Instance?.LocalPlayer;
 
         private readonly List<NetworkBehaviour> _behaviours = new();
+        private ushort _nextBehaviourId = 1;
 
         internal void Initialize(uint id, NetworkPlayer owner)
         {
@@ -41,16 +42,22 @@ namespace DokuzuNet.Integration
         internal void AddBehaviour(NetworkBehaviour behaviour)
         {
             behaviour.NetworkObject = this;
+            behaviour.BehaviourId = _nextBehaviourId++;
             _behaviours.Add(behaviour);
             if (IsSpawned)
                 behaviour.InvokeOnSpawn();
+        }
+
+        public NetworkBehaviour? GetBehaviourById(ushort id)
+        {
+            return _behaviours.FirstOrDefault(b => b.BehaviourId == id);
         }
 
         internal void OnSpawn()
         {
             foreach (var b in _behaviours)
             {
-                b.InvokeOnSpawn(); // Используем внутренний метод
+                b.InvokeOnSpawn();
             }
         }
 

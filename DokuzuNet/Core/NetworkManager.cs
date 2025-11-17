@@ -100,7 +100,7 @@ namespace DokuzuNet.Core
 
                 _objects[msg.NetworkId] = netObj;
 
-                Logger.Info($"{prefabName} (ID: {msg.NetworkId}) at ({msg.X:F1}, {msg.Y:F1}, {msg.Z:F1})");
+                Logger.Info($"Spawned {prefabName} (ID: {msg.NetworkId}) at ({msg.X:F1}, {msg.Y:F1}, {msg.Z:F1})");
 
                 netObj.OnSpawn();
             }
@@ -110,12 +110,14 @@ namespace DokuzuNet.Core
         {
             if (_objects.TryGetValue(msg.ObjectId, out var netObj))
             {
-                var behaviour = netObj.GetBehaviours().FirstOrDefault(); // TODO: get by BehaviourId
-
+                var behaviour = netObj.GetBehaviourById(msg.BehaviourId);
                 if (behaviour != null)
                 {
                     behaviour.ApplySyncVar(msg.VarId, msg.Value);
-                    Logger.Info($"Object {msg.ObjectId} Var {msg.VarId} updated");
+                }
+                else
+                {
+                    Logger.Warn($"Behaviour ID {msg.BehaviourId} not found on object {msg.ObjectId}");
                 }
             }
         }
@@ -124,12 +126,14 @@ namespace DokuzuNet.Core
         {
             if (_objects.TryGetValue(msg.ObjectId, out var netObj))
             {
-                var behaviour = netObj.GetBehaviours().FirstOrDefault();
-
+                var behaviour = netObj.GetBehaviourById(msg.BehaviourId);
                 if (behaviour != null)
                 {
                     behaviour.InvokeRpc(msg.RpcId, msg.Args);
-                    Logger.Info($"Object {msg.ObjectId} Rpc {msg.RpcId} invoked");
+                }
+                else
+                {
+                    Logger.Warn($"Behaviour ID {msg.BehaviourId} not found on object {msg.ObjectId}");
                 }
             }
         }
@@ -241,7 +245,7 @@ namespace DokuzuNet.Core
 
             _objects[netId] = obj;
 
-            var msg = new SpawnMessage(prefabId, netId, (uint)owner.Connection.EndPoint.Port, x, y, z); // Fixed OwnerId
+            var msg = new SpawnMessage(prefabId, netId, (uint)owner.Connection.EndPoint.Port, x, y, z);
             await BroadcastAsync(msg);
 
             obj.OnSpawn();

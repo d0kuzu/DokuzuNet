@@ -1,13 +1,13 @@
-﻿using DokuzuNet.Core;
+﻿using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+
+using DokuzuNet.Core;
 using DokuzuNet.Networking;
 using DokuzuNet.Networking.Message;
 using DokuzuNet.Networking.Packet;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace DokuzuNet.Integration
 {
@@ -16,6 +16,7 @@ namespace DokuzuNet.Integration
         public NetworkObject? NetworkObject { get; internal set; }
         public NetworkPlayer? Owner => NetworkObject?.Owner;
         public bool IsLocalOwned => NetworkObject?.IsLocalOwned ?? false;
+        internal ushort BehaviourId { get; set; }
 
         // === SyncVar ===
         private readonly Dictionary<ushort, Action<byte[]>> _syncVarSetters = new();
@@ -46,7 +47,7 @@ namespace DokuzuNet.Integration
                 _ => Array.Empty<byte>()
             };
 
-            var msg = new SyncVarMessage(NetworkObject.NetworkId, GetBehaviourId(), varId, rawValue);
+            var msg = new SyncVarMessage(NetworkObject.NetworkId, BehaviourId, varId, rawValue);
 
             if (NetworkManager.Instance!.IsServer)
             {
@@ -106,7 +107,7 @@ namespace DokuzuNet.Integration
             var rpcId = GetRpcId(method);
             var argsData = SerializeArgs(args);
 
-            var msg = new RpcMessage(NetworkObject!.NetworkId, GetBehaviourId(), rpcId, argsData);
+            var msg = new RpcMessage(NetworkObject!.NetworkId, BehaviourId, rpcId, argsData);
             await NetworkManager.Instance.SendToServerAsync(msg);
         }
 
@@ -121,7 +122,7 @@ namespace DokuzuNet.Integration
             var rpcId = GetRpcId(method);
             var argsData = SerializeArgs(args);
 
-            var msg = new RpcMessage(NetworkObject!.NetworkId, GetBehaviourId(), rpcId, argsData);
+            var msg = new RpcMessage(NetworkObject!.NetworkId, BehaviourId, rpcId, argsData);
             await NetworkManager.Instance.SendToAsync(target, msg);
         }
 
@@ -136,7 +137,7 @@ namespace DokuzuNet.Integration
             var rpcId = GetRpcId(method);
             var argsData = SerializeArgs(args);
 
-            var msg = new RpcMessage(NetworkObject!.NetworkId, GetBehaviourId(), rpcId, argsData);
+            var msg = new RpcMessage(NetworkObject!.NetworkId, BehaviourId, rpcId, argsData);
             await NetworkManager.Instance.BroadcastAsync(msg);
         }
 
@@ -196,12 +197,6 @@ namespace DokuzuNet.Integration
                 };
             }
             return args;
-        }
-
-        // === Вспомогательные ===
-        private ushort GetBehaviourId()
-        {
-            return 1;
         }
     }
 }
