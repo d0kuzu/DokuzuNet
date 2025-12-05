@@ -1,4 +1,5 @@
 ﻿using DokuzuNet.Core.Connection;
+using DokuzuNet.Utils;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -138,12 +139,14 @@ namespace DokuzuNet.Transprot
             if (_isServer && _isClient && IPAddress.IsLoopback(remote.Address) && remote.Port == _localEndPoint!.Port)
             {
                 // Self-packet — пропустить, чтобы избежать цикла
+                Logger.Info("Self-Packet");
                 return;
             }
 
             // CONNECT
             if (buffer.Length == 1 && buffer[0] == 0x01 && _isServer)
             {
+                Logger.Info("get connect packet");
                 var conn = _connections.GetOrAdd(remote, _ => new UdpConnection(_udpClient!, remote));
                 conn.UpdateLastReceived();
                 OnClientConnected?.Invoke(conn);
@@ -167,6 +170,7 @@ namespace DokuzuNet.Transprot
             // WELCOME
             if (buffer.Length == 1 && buffer[0] == 0x02 && !_isServer && _localClientConnection?.EndPoint.Equals(remote) == true)
             {
+                Logger.Info("get welcome packet");
                 _localClientConnection.UpdateLastReceived();
 
                 OnClientConnected?.Invoke(_localClientConnection);
@@ -236,6 +240,7 @@ namespace DokuzuNet.Transprot
 
         // === UTILITY ===
         public IReadOnlyCollection<IConnection> GetConnections() => _connections.Values.ToList().AsReadOnly();
+        public EndPoint? GetLocalClientEndPoint() => _localEndPoint;
         public IConnection? GetLocalClientConnection() => _localClientConnection;
     }
 }

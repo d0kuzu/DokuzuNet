@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -21,6 +22,7 @@ namespace DokuzuNet.Transprot
         event Action<Exception>? OnError;
 
         IReadOnlyCollection<IConnection> GetConnections();
+        EndPoint? GetLocalClientEndPoint();
         IConnection? GetLocalClientConnection();
     }
 }

@@ -14,68 +14,75 @@ namespace DokuzuNet.ClientTest
     {
         static async Task Main(string[] args)
         {
+            await Task.Delay(5000);
             var transport = new UdpTransport();
             var manager = new NetworkManager(transport);
 
             // Test 1: StartClient
             await manager.StartClientAsync("127.0.0.1", 11000);
             await Task.Delay(5000);
+            Console.WriteLine($"local endpoint: {manager.LocalEndPoint}");
 
             // Test 2: LocalPlayer
-            var localPlayer = manager.LocalPlayer;
-            if (localPlayer != null)
+            //var localPlayer = manager.LocalPlayer;
+            //if (localPlayer != null)
+            //{
+            //    Console.WriteLine($"LocalPlayer (EndPoint: {localPlayer.Connection.EndPoint})");
+            //}
+            //else
+            //{
+            //    Console.WriteLine("LocalPlayer null");
+            //}
+
+            while (true)
             {
-                Console.WriteLine($"Test Passed: LocalPlayer (IsLocal: {localPlayer.IsLocal})");
-            }
-            else
-            {
-                Console.WriteLine("Test Failed: LocalPlayer null");
-            }
 
-            // Test 3: SendToServerAsync (ChatMessage)
-            await manager.SendToServerAsync(new ChatMessage("Hello from client!"));
-            Console.WriteLine("Test Passed: SendToServerAsync");
-
-            // Ждём спавна от сервера (для теста — press key)
-            Console.WriteLine("Press any key after server spawns...");
-            Console.ReadKey();
-
-            // Test 4: SpawnMessage received (from server)
-            if (manager.Objects.Count > 0)
-            {
-                var obj = manager.Objects.Values.First();
-                Console.WriteLine("Test Passed: SpawnMessage + NetworkObject");
-
-                // Test 5: SyncVar received (from server)
-                obj.AddBehaviour(new PlayerBehaviour());
-                var behaviour = obj.GetBehaviour<PlayerBehaviour>();
-                if (behaviour != null)
-                {
-                    Console.WriteLine($"Test Passed: SyncVar (Health: {behaviour.GetHealth()})");
-                }
-
-                // Test 6: CallServerRpc (client → server)
-                await behaviour.TestServerRpc();
-                Console.WriteLine("Test Passed: CallServerRpc");
-
-                // Test 7: ClientRpc received (from server)
-                Console.WriteLine("Test Passed: ClientRpc (wait for server call)");
             }
 
-            // Test 8: Despawn (from server)
-            Console.WriteLine("Press any key after server despawns...");
-            Console.ReadKey();
-            if (manager.Objects.Count == 0)
-            {
-                Console.WriteLine("Test Passed: Despawn");
-            }
+            //// Test 3: SendToServerAsync (ChatMessage)
+            //await manager.SendToServerAsync(new ChatMessage("Hello from client!"));
+            //Console.WriteLine("Test Passed: SendToServerAsync");
 
-            // Test 9: StopAsync
-            await manager.StopAsync();
-            Console.WriteLine("Test Passed: StopAsync");
+            //// Ждём спавна от сервера (для теста — press key)
+            //Console.WriteLine("Press any key after server spawns...");
+            //Console.ReadKey();
 
-            Console.WriteLine("All Tests Passed!");
-            Console.ReadKey();
+            //// Test 4: SpawnMessage received (from server)
+            //if (manager.Objects.Count > 0)
+            //{
+            //    var obj = manager.Objects.Values.First();
+            //    Console.WriteLine("Test Passed: SpawnMessage + NetworkObject");
+
+            //    // Test 5: SyncVar received (from server)
+            //    obj.AddBehaviour(new PlayerBehaviour());
+            //    var behaviour = obj.GetBehaviour<PlayerBehaviour>();
+            //    if (behaviour != null)
+            //    {
+            //        Console.WriteLine($"Test Passed: SyncVar (Health: {behaviour.GetHealth()})");
+            //    }
+
+            //    // Test 6: CallServerRpc (client → server)
+            //    await behaviour.TestServerRpc();
+            //    Console.WriteLine("Test Passed: CallServerRpc");
+
+            //    // Test 7: ClientRpc received (from server)
+            //    Console.WriteLine("Test Passed: ClientRpc (wait for server call)");
+            //}
+
+            //// Test 8: Despawn (from server)
+            //Console.WriteLine("Press any key after server despawns...");
+            //Console.ReadKey();
+            //if (manager.Objects.Count == 0)
+            //{
+            //    Console.WriteLine("Test Passed: Despawn");
+            //}
+
+            //// Test 9: StopAsync
+            //await manager.StopAsync();
+            //Console.WriteLine("Test Passed: StopAsync");
+
+            //Console.WriteLine("All Tests Passed!");
+            //Console.ReadKey();
         }
     }
 

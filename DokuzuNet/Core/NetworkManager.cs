@@ -34,6 +34,7 @@ namespace DokuzuNet.Core
         public bool IsServer => Mode == NetworkMode.Server || Mode == NetworkMode.Host;
         public bool IsClient => Mode == NetworkMode.Client || Mode == NetworkMode.Host;
         public NetworkPlayer? LocalPlayer { get; private set; }
+        public EndPoint? LocalEndPoint => _transport.GetLocalClientEndPoint();
         public IConnection? LocalConnection => _transport.GetLocalClientConnection();
         public PrefabRegistry Prefabs => _prefabs;
         public IReadOnlyDictionary<uint, NetworkObject> Objects => _objects;
